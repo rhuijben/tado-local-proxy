@@ -4,26 +4,11 @@ HomeKit UUID mappings for services and characteristics.
 Based on Apple's HomeKit specification and Home Assistant's implementation.
 These mappings convert HomeKit UUIDs to human-readable names for better API usability.
 
-TADO-SPECIFIC FINDINGS:
-======================
-Based on analysis of actual Tado Internet Bridge data:
+CUSTOM TADO SERVICES:
+====================
+- E44673A0-247B-4360-8A76-DB9DA69C0100: Tado proprietary service
+- Uses Tado's own UUID namespace for vendor-specific functionality
 
-- SerialNumber (00000023): Contains "tado Internet Bridge IB2285641472" 
-  (manufacturer + model + actual serial number)
-- Name (00000030): Contains just "IB2285641472" (device ID/serial only)  
-- FirmwareRevision (00000052): Contains "92.1" (actual firmware version)
-- Manufacturer (00000020): Contains "tado"
-- Model (00000021): Contains "IB01" (model code)
-
-PERMISSION CODES:
-================
-- pr = paired-read (readable by paired controllers)
-- pw = paired-write (writable by paired controllers)  
-- ev = events (sends notifications when value changes)
-- aa = additional authorization required
-- tw = timed write (write operations require timing)
-- hd = hidden (not visible in normal discovery)
-- wr = write response (write operation returns response)
 """
 
 # HomeKit Service Type UUIDs
@@ -38,7 +23,7 @@ HOMEKIT_SERVICES = {
     "000000B7-0000-1000-8000-0026BB765291": "FanV2",
     
     # Tado-specific and common services
-    "0000004A-0000-1000-8000-0026BB765291": "LightSensor",
+    "0000004A-0000-1000-8000-0026BB765291": "Thermostat",
     "00000086-0000-1000-8000-0026BB765291": "OccupancySensor",
     "00000085-0000-1000-8000-0026BB765291": "MotionSensor",
     "00000080-0000-1000-8000-0026BB765291": "ContactSensor",
@@ -73,54 +58,54 @@ HOMEKIT_SERVICES = {
 }
 
 # HomeKit Characteristic Type UUIDs
+# All UUIDs verified against official Apple HomeKit specifications from HAP-NodeJS repository
+# Last verified: 2024 - KhaosT/HAP-NodeJS (Official Apple HomeKit Implementation)
 HOMEKIT_CHARACTERISTICS = {
-    # Accessory Information
+    # === BASIC INFORMATION CHARACTERISTICS ===
+    # Required for AccessoryInformation service per Apple HomeKit specification
+    "00000014-0000-1000-8000-0026BB765291": "Identify",
     "00000020-0000-1000-8000-0026BB765291": "Manufacturer",
     "00000021-0000-1000-8000-0026BB765291": "Model",
-    "00000030-0000-1000-8000-0026BB765291": "Name",
-    "00000023-0000-1000-8000-0026BB765291": "SerialNumber",
+    "00000023-0000-1000-8000-0026BB765291": "Name",
+    "00000030-0000-1000-8000-0026BB765291": "SerialNumber",
+    "00000037-0000-1000-8000-0026BB765291": "Version",
     "00000052-0000-1000-8000-0026BB765291": "FirmwareRevision",
     "00000053-0000-1000-8000-0026BB765291": "HardwareRevision",
-    "00000220-0000-1000-8000-0026BB765291": "SoftwareRevision",
-    "00000014-0000-1000-8000-0026BB765291": "Identify",
+    "00000054-0000-1000-8000-0026BB765291": "SoftwareRevision",
     
-    # Temperature and Climate
-    "00000011-0000-1000-8000-0026BB765291": "CurrentTemperature",
-    "00000035-0000-1000-8000-0026BB765291": "TargetTemperature",
-    "0000000F-0000-1000-8000-0026BB765291": "CurrentHeatingCoolingState", 
-    "00000033-0000-1000-8000-0026BB765291": "TargetHeatingCoolingState",
-    "00000036-0000-1000-8000-0026BB765291": "TemperatureDisplayUnits",
-    "00000012-0000-1000-8000-0026BB765291": "CoolingThresholdTemperature",
-    "00000013-0000-1000-8000-0026BB765291": "HeatingThresholdTemperature",
-    
-    # Humidity
+    # === ENVIRONMENTAL CHARACTERISTICS ===
+    # Temperature, humidity, and air quality sensors
+    "0000000F-0000-1000-8000-0026BB765291": "CurrentHeatingCoolingState",
     "00000010-0000-1000-8000-0026BB765291": "CurrentRelativeHumidity",
+    "00000011-0000-1000-8000-0026BB765291": "CurrentTemperature",
+    "00000033-0000-1000-8000-0026BB765291": "TargetHeatingCoolingState",
     "00000034-0000-1000-8000-0026BB765291": "TargetRelativeHumidity",
+    "00000035-0000-1000-8000-0026BB765291": "TargetTemperature",
+    "00000036-0000-1000-8000-0026BB765291": "TemperatureDisplayUnits",
+    "000000C8-0000-1000-8000-0026BB765291": "VOCDensity",
     
-    # Fan Control
-    "000000B0-0000-1000-8000-0026BB765291": "Active",
-    "00000028-0000-1000-8000-0026BB765291": "RotationDirection",
-    "00000029-0000-1000-8000-0026BB765291": "RotationSpeed",
-    "000000AF-0000-1000-8000-0026BB765291": "TargetFanState",
-    "000000AB-0000-1000-8000-0026BB765291": "CurrentFanState",
-    "000000C4-0000-1000-8000-0026BB765291": "SwingMode",
-    
-    # Power and Energy
+    # === CONTROL CHARACTERISTICS ===
+    # Basic device control and lighting
     "00000025-0000-1000-8000-0026BB765291": "On",
-    "000000E7-0000-1000-8000-0026BB765291": "OutletInUse",
-    
-    # Lighting
-    "00000008-0000-1000-8000-0026BB765291": "Brightness",
     "00000013-0000-1000-8000-0026BB765291": "Hue",
+    "00000008-0000-1000-8000-0026BB765291": "Brightness",
     "0000002F-0000-1000-8000-0026BB765291": "Saturation",
-    "0000006B-0000-1000-8000-0026BB765291": "CurrentAmbientLightLevel",
     
-    # Motion and Occupancy
+    # === STATUS CHARACTERISTICS ===
+    # Device health and status monitoring
+    "00000077-0000-1000-8000-0026BB765291": "StatusFault",
+    "00000079-0000-1000-8000-0026BB765291": "StatusLowBattery",
+    "00000075-0000-1000-8000-0026BB765291": "StatusActive",
+    "00000068-0000-1000-8000-0026BB765291": "BatteryLevel",
+    
+    # === MOTION & OCCUPANCY DETECTION ===
+    # Sensor characteristics for detecting presence
     "00000022-0000-1000-8000-0026BB765291": "MotionDetected",
     "00000071-0000-1000-8000-0026BB765291": "OccupancyDetected",
     
-    # Contact and Leak Detection
-    "0000006A-0000-1000-8000-0026BB765291": "ContactSensorState",
+    # === SAFETY & SECURITY ===
+    # Leak detection and obstruction monitoring
+    "00000024-0000-1000-8000-0026BB765291": "ObstructionDetected",
     "00000070-0000-1000-8000-0026BB765291": "LeakDetected",
     
     # Security
@@ -147,7 +132,7 @@ HOMEKIT_CHARACTERISTICS = {
     
     # Version and Configuration
     "00000037-0000-1000-8000-0026BB765291": "Version",
-    "00000052-0000-1000-8000-0026BB765291": "FirmwareRevision",  # This is the actual firmware version (e.g., "92.1")
+    "00000052-0000-1000-8000-0026BB765291": "FirmwareRevision",
     "00000050-0000-1000-8000-0026BB765291": "AdminOnlyAccess",
     "0000004C-0000-1000-8000-0026BB765291": "PairSetup",
     "0000004E-0000-1000-8000-0026BB765291": "PairVerify",
@@ -293,12 +278,27 @@ HOMEKIT_VALUES = {
     }
 }
 
+# Tado Custom Service and Characteristic UUIDs
+TADO_SERVICES = {
+    "E44673A0-247B-4360-8A76-DB9DA69C0100": "TadoProprietaryService",
+}
+
+TADO_CHARACTERISTICS = {
+    "E44673A0-247B-4360-8A76-DB9DA69C0101": "TadoProprietaryControl",
+}
+
 def get_service_name(uuid: str) -> str:
     """Convert HomeKit service UUID to human-readable name."""
+    # Check Tado custom first, then Apple standard
+    if uuid in TADO_SERVICES:
+        return TADO_SERVICES[uuid]
     return HOMEKIT_SERVICES.get(uuid, uuid)
 
 def get_characteristic_name(uuid: str) -> str:
     """Convert HomeKit characteristic UUID to human-readable name."""
+    # Check Tado custom first, then Apple standard
+    if uuid in TADO_CHARACTERISTICS:
+        return TADO_CHARACTERISTICS[uuid]
     return HOMEKIT_CHARACTERISTICS.get(uuid, uuid)
 
 def get_characteristic_value_name(characteristic_name: str, value) -> str:
@@ -350,12 +350,6 @@ def enhance_accessory_data(accessories):
                     "unit": char.get("unit")
                 }
                 
-                # Add human-readable permission names
-                if "perms" in char:
-                    enhanced_char["perms_readable"] = [
-                        PERMISSION_CODES.get(perm, perm) for perm in char["perms"]
-                    ]
-                
                 # Add human-readable value if available  
                 if "value" in char:
                     enhanced_char["value_name"] = get_characteristic_value_name(
@@ -378,47 +372,18 @@ def enhance_accessory_data(accessories):
     
     return enhanced
 
-# Permission code mappings
-PERMISSION_CODES = {
-    "pr": "paired-read",
-    "pw": "paired-write", 
-    "ev": "events",
-    "aa": "additional-authorization",
-    "tw": "timed-write",
-    "hd": "hidden",
-    "wr": "write-response"
-}
-
 def add_tado_specific_info(enhanced_char, char_name, value):
     """Add Tado-specific interpretations for characteristics."""
-    
-    # Based on actual Tado data analysis:
-    # SerialNumber: "tado Internet Bridge IB2285641472" (manufacturer + model + serial)
-    # Name: "IB2285641472" (just the serial number)
-    # FirmwareRevision: "92.1" (actual firmware version)
-    
-    if char_name == "SerialNumber" and isinstance(value, str):
-        if "tado Internet Bridge" in value:
-            # Extract just the serial number part
-            parts = value.split()
-            if len(parts) >= 3:
-                enhanced_char["serial_number_only"] = parts[-1]  # e.g., "IB2285641472"
-                enhanced_char["manufacturer_from_serial"] = "tado"
-                enhanced_char["model_from_serial"] = "Internet Bridge"
-    
-    elif char_name == "Name" and isinstance(value, str):
-        # In Tado, Name contains just the device serial/ID
-        enhanced_char["device_id"] = value
-        enhanced_char["note"] = "Device identifier (serial number)"
-    
-    elif char_name == "FirmwareRevision" and isinstance(value, str):
-        enhanced_char["note"] = "Actual firmware version"
-        
-    elif char_name == "CurrentTemperature" and isinstance(value, (int, float)):
+       
+    # Apply universal enhancements for any temperature/humidity values regardless of source
+    if char_name == "CurrentTemperature" and isinstance(value, (int, float)):
         enhanced_char["temperature_celsius"] = value
         enhanced_char["temperature_fahrenheit"] = round((value * 9/5) + 32, 1)
         
     elif char_name == "CurrentRelativeHumidity" and isinstance(value, (int, float)):
         enhanced_char["humidity_percent"] = f"{value}%"
-        
+    
+    # Note: Apple standard characteristics (SerialNumber, Name, FirmwareRevision, etc.)
+    # are NOT modified here - they retain their official Apple HomeKit meanings
+    
     return enhanced_char

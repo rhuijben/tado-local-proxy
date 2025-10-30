@@ -1,28 +1,49 @@
 #!/usr/bin/env python3
 import argparse
 import asyncio
+
+import asyncio
 import json
+import logging
 import os
 import sqlite3
+import time
+import traceback
 import uuid
+import asyncio
+
+from collections import defaultdict
+from typing import Dict, List, Any, Optional
+
+
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
 from pathlib import Path
 from typing import Optional
 
+from aiohomekit.controller.ip.connection import HomeKitConnection
+from aiohomekit.protocol import perform_pair_setup_part1, perform_pair_setup_part2
+from aiohomekit.utils import check_pin_format, pair_with_auth
 from aiohomekit.controller.ip.pairing import IpPairing
 from aiohomekit.controller.ip.controller import IpController
-
+from aiohomekit.controller.ip.connection import HomeKitConnection
+from aiohomekit.protocol import perform_pair_setup_part2
+from aiohomekit.utils import check_pin_format
+from aiohomekit.controller.ip.connection import HomeKitConnection
+from aiohomekit.protocol import perform_pair_setup_part1, perform_pair_setup_part2
+from aiohomekit.utils import check_pin_format, pair_with_auth
+from aiohomekit.controller.ip.connection import HomeKitConnection
+from aiohomekit.protocol import perform_pair_setup_part1, perform_pair_setup_part2
+from aiohomekit.utils import check_pin_format, pair_with_auth
+from aiohomekit.controller import Controller
+        
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
 import uvicorn
-import asyncio
-import time
-from typing import Dict, List, Any, Optional
+
+from zeroconf.asyncio import AsyncZeroconf
 
 from homekit_uuids import enhance_accessory_data, get_service_name, get_characteristic_name
-from collections import defaultdict
-import logging
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -90,9 +111,6 @@ class TadoBridge:
     @staticmethod
     async def get_or_create_controller_identity(db_path: str):
         """Get or create a persistent controller identity for HomeKit pairing."""
-        import uuid
-        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-        from cryptography.hazmat.primitives import serialization
         
         conn = sqlite3.connect(db_path)
         conn.executescript(DB_SCHEMA)
@@ -212,10 +230,7 @@ class TadoBridge:
     @staticmethod
     async def perform_part2_only(host: str, port: int, pin: str, controller_id: str, salt: bytes, part1_public_key: bytes, db_path: str):
         """Resume pairing from Part 2 using saved Part 1 state."""
-        from aiohomekit.controller.ip.connection import HomeKitConnection
-        from aiohomekit.protocol import perform_pair_setup_part2
-        from aiohomekit.utils import check_pin_format
-        
+
         check_pin_format(pin)
         
         print(f"🔄 Resuming Part 2 with saved state for controller {controller_id[:8]}...")
@@ -257,9 +272,6 @@ class TadoBridge:
     @staticmethod
     async def perform_fresh_pairing(host: str, port: int, pin: str, controller_id: str, db_path: str):
         """Perform fresh pairing with persistent controller identity."""
-        from aiohomekit.controller.ip.connection import HomeKitConnection
-        from aiohomekit.protocol import perform_pair_setup_part1, perform_pair_setup_part2
-        from aiohomekit.utils import check_pin_format, pair_with_auth
         
         check_pin_format(pin)
         
@@ -412,10 +424,6 @@ class TadoBridge:
     @staticmethod
     async def perform_alternative_pairing(host: str, port: int, pin: str):
         """Try alternative pairing approach with different timing and connection handling."""
-        import uuid
-        from aiohomekit.controller.ip.connection import HomeKitConnection
-        from aiohomekit.protocol import perform_pair_setup_part1, perform_pair_setup_part2
-        from aiohomekit.utils import check_pin_format, pair_with_auth
         
         print("🔄 Trying alternative pairing approach...")
         print("- Using longer timeouts")
@@ -441,7 +449,6 @@ class TadoBridge:
                     print(f"Cannot query pair-setup status: {e}")
                 
                 # Wait a moment before starting pairing
-                import asyncio
                 await asyncio.sleep(2)
                 
                 print(f"🚀 Starting pairing protocol with feature flags {feature_flags}")
@@ -516,10 +523,6 @@ class TadoBridge:
     @staticmethod
     async def perform_simple_pairing(host: str, port: int, pin: str):
         """Simplified pairing approach to isolate the UnavailableError issue."""
-        import uuid
-        from aiohomekit.controller.ip.connection import HomeKitConnection
-        from aiohomekit.protocol import perform_pair_setup_part1, perform_pair_setup_part2
-        from aiohomekit.utils import check_pin_format, pair_with_auth
         
         print("🔬 SIMPLIFIED PAIRING APPROACH")
         print("=" * 40)
@@ -632,7 +635,6 @@ class TadoBridge:
                 await connection.close()
                 
                 # Wait a moment before Part 2
-                import asyncio
                 await asyncio.sleep(2)
                 
                 connection = HomeKitConnection(owner=None, hosts=[host], port=port)
@@ -729,8 +731,6 @@ class TadoBridge:
             
             # Create a controller with proper async context
             try:
-                from zeroconf.asyncio import AsyncZeroconf
-                
                 # Create async zeroconf instance 
                 zeroconf_instance = AsyncZeroconf()
                 
@@ -786,7 +786,6 @@ class TadoBridge:
                 
                 # Create pairing instance with the new data
                 # Create a controller instance for the pairing
-                from zeroconf.asyncio import AsyncZeroconf
                 
                 zeroconf_instance = AsyncZeroconf()
                 char_cache = SimpleCharacteristicCache()
@@ -861,8 +860,6 @@ class TadoBridge:
             
             try:
                 # Create required dependencies for Controller
-                from zeroconf.asyncio import AsyncZeroconf
-                from aiohomekit.controller import Controller
                 
                 # Create AsyncZeroconf instance
                 zeroconf_instance = AsyncZeroconf()
@@ -898,13 +895,11 @@ class TadoBridge:
                 
             except Exception as e:
                 print(f"❌ Controller-based pairing failed: {e}")
-                import traceback
                 traceback.print_exc()
                 raise
                 
         except Exception as e:
             print(f"💥 Pairing failed with error: {e}")
-            import traceback
             traceback.print_exc()
             raise
 
@@ -1183,7 +1178,7 @@ async def get_thermostats():
     for accessory in accessories:
         services = accessory.get('services', [])
         for service in services:
-            if service.get('type') == 'public.hap.service.thermostat':
+            if service.get('type') == '0000004A-0000-1000-8000-0026BB765291':
                 
                 thermostat = {
                     'accessory_id': accessory.get('aid'),
