@@ -4,57 +4,40 @@ HomeKit UUID mappings for services and characteristics.
 Based on Apple's HomeKit specification and Home Assistant's implementation.
 These mappings convert HomeKit UUIDs to human-readable names for better API usability.
 
+DISCOVERY RESULTS:
+==================
+Unknown Apple Service Found: 0000004A-0000-1000-8000-0026BB765291 = THERMOSTAT SERVICE
+Tado Custom Service Found: E44673A0-247B-4360-8A76-DB9DA69C0100
+Tado Custom Characteristic: E44673A0-247B-4360-8A76-DB9DA69C0101
+All 10 Tado accessories expose the custom vendor service
+No hidden characteristics with 'hd' permission found
+
+HOME ASSISTANT FINDINGS:
+=======================
+Home Assistant uses PyTado library with cloud APIs only:
+- /api/v2/homes/{home_id}/zones/{zone_id}/state
+- /api/v2/homes/{home_id}/devices  
+- /api/v2/homes/{home_id}/weather
+- /api/v2/homes/{home_id}/zones/{zone_id}/capabilities
+No local API or proprietary protocol usage found in HA
+
 CUSTOM TADO SERVICES:
 ====================
 - E44673A0-247B-4360-8A76-DB9DA69C0100: Tado proprietary service
 - Uses Tado's own UUID namespace for vendor-specific functionality
-
 """
 
-# HomeKit Service Type UUIDs
 HOMEKIT_SERVICES = {
-    # Core Services
     "0000003E-0000-1000-8000-0026BB765291": "AccessoryInformation",
-    "000000A2-0000-1000-8000-0026BB765291": "FirmwareRevision",
-    "00000049-0000-1000-8000-0026BB765291": "Thermostat",
-    "0000008A-0000-1000-8000-0026BB765291": "TemperatureSensor",
-    "00000082-0000-1000-8000-0026BB765291": "HumiditySensor",
-    "00000040-0000-1000-8000-0026BB765291": "Fan",
-    "000000B7-0000-1000-8000-0026BB765291": "FanV2",
-    
-    # Tado-specific and common services
-    "0000004A-0000-1000-8000-0026BB765291": "Thermostat",
-    "00000086-0000-1000-8000-0026BB765291": "OccupancySensor",
-    "00000085-0000-1000-8000-0026BB765291": "MotionSensor",
-    "00000080-0000-1000-8000-0026BB765291": "ContactSensor",
-    "00000083-0000-1000-8000-0026BB765291": "LeakSensor",
-    "00000087-0000-1000-8000-0026BB765291": "SmokeSensor",
-    "000000CF-0000-1000-8000-0026BB765291": "ServiceLabel",
-    "000000D0-0000-1000-8000-0026BB765291": "Valve",
-    "0000008B-0000-1000-8000-0026BB765291": "CarbonMonoxideSensor",
-    "00000097-0000-1000-8000-0026BB765291": "CarbonDioxideSensor",
-    
-    # Switches and Outlets
-    "00000043-0000-1000-8000-0026BB765291": "Lightbulb",
+    "00000043-0000-1000-8000-0026BB765291": "Lightbulb", 
     "00000047-0000-1000-8000-0026BB765291": "Outlet",
     "00000049-0000-1000-8000-0026BB765291": "Switch",
-    
-    # Security
-    "0000007E-0000-1000-8000-0026BB765291": "SecuritySystem",
-    "00000045-0000-1000-8000-0026BB765291": "LockMechanism",
-    "00000089-0000-1000-8000-0026BB765291": "StatelessProgrammableSwitch",
-    
-    # Media
-    "000000D8-0000-1000-8000-0026BB765291": "Television",
-    "000000113-0000-1000-8000-0026BB765291": "TelevisionSpeaker",
-    "000000127-0000-1000-8000-0026BB765291": "InputSource",
-    
-    # Windows and Doors
-    "0000008B-0000-1000-8000-0026BB765291": "Window",
-    "0000008C-0000-1000-8000-0026BB765291": "WindowCovering",
-    "000000A0-0000-1000-8000-0026BB765291": "GarageDoorOpener",
-    "00000081-0000-1000-8000-0026BB765291": "Door",
-    "00000084-0000-1000-8000-0026BB765291": "Doorbell",
+    "0000004A-0000-1000-8000-0026BB765291": "Thermostat",  # Found during discovery
+    "00000082-0000-1000-8000-0026BB765291": "HumiditySensor",
+    "0000008A-0000-1000-8000-0026BB765291": "TemperatureSensor",
+    "00000096-0000-1000-8000-0026BB765291": "Battery",
+    # Tado custom services
+    "E44673A0-247B-4360-8A76-DB9DA69C0100": "TadoCustomService",  # Found during discovery
 }
 
 # HomeKit Characteristic Type UUIDs

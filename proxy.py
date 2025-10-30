@@ -942,27 +942,262 @@ class TadoLocalAPI:
             raise HTTPException(status_code=503, detail=f"Failed to refresh accessories: {e}")
     
     async def setup_event_listeners(self):
-        """Setup HomeKit event listeners for real-time updates."""
+        """Setup unified change detection with events + polling comparison."""
         if not self.pairing:
             return
             
+        # Initialize change tracking
+        self.change_tracker = {
+            'events_received': 0,
+            'polling_changes': 0,
+            'last_values': {},  # Store last known values
+            'event_characteristics': set(),  # Track which chars have events
+        }
+        
+        # Try to set up persistent event system
+        await self.setup_persistent_events()
+        
+        # Always set up polling as backup/comparison
+        await self.setup_polling_system()
+    
+    async def setup_persistent_events(self):
+        """Set up persistent event subscriptions to all event characteristics."""
         try:
-            # Subscribe to HomeKit events for real-time updates
-            def event_callback(update_data):
-                """Handle HomeKit characteristic updates."""
-                asyncio.create_task(self.handle_homekit_event(update_data))
+            logger.info("Setting up persistent event system...")
             
-            # Subscribe to all accessories for updates
-            await self.pairing.subscribe(self.accessories_cache)
-            logger.info("HomeKit event listeners setup successfully")
+            # Register unified change handler for events
+            def event_callback(update_data):
+                """Handle ALL HomeKit characteristic updates."""
+                asyncio.create_task(self.handle_unified_change(update_data, source="EVENT"))
+            
+            # Register the callback with the pairing's dispatcher
+            self.pairing.dispatcher_connect(event_callback)
+            logger.info("Event callback registered with dispatcher")
+            
+            # Collect ALL event-capable characteristics from ALL accessories
+            all_event_characteristics = []
+            characteristic_map = {}  # For debugging: map (aid,iid) to names
+            
+            for accessory in self.accessories_cache:
+                aid = accessory.get('aid')
+                for service in accessory.get('services', []):
+                    for char in service.get('characteristics', []):
+                        perms = char.get('perms', [])
+                        if 'ev' in perms:  # Event notification supported
+                            iid = char.get('iid')
+                            char_type = char.get('type', '').lower()
+                            
+                            # Track what this characteristic is
+                            char_name = self.get_characteristic_name(char_type)
+                            
+                            # Skip TemperatureDisplayUnits - not interested in unit conversions
+                            if 'TemperatureDisplayUnits' in char_name:
+                                logger.debug(f"Skipping TemperatureDisplayUnits: aid={aid}, iid={iid}")
+                                continue
+                            
+                            all_event_characteristics.append((aid, iid))
+                            characteristic_map[(aid, iid)] = char_name
+                            self.change_tracker['event_characteristics'].add((aid, iid))
+                            
+                            logger.debug(f"Event char: aid={aid}, iid={iid}, type={char_name}")
+            
+            if all_event_characteristics:
+                # Subscribe to ALL event characteristics at once - this is critical!
+                await self.pairing.subscribe(all_event_characteristics)
+                logger.info(f"✅ Subscribed to {len(all_event_characteristics)} event characteristics")
+                
+                # Store the characteristic map for debugging
+                self.characteristic_map = characteristic_map
+                
+                # Test event reception briefly
+                await self.test_event_reception()
+                
+                return True
+            else:
+                logger.warning("No event-capable characteristics found")
+                return False
+                
+        except Exception as e:
+            logger.warning(f"Event system setup failed: {e}")
+            return False
+    
+    async def test_event_reception(self):
+        """Test if events are actually being received."""
+        logger.info("Testing event reception for 5 seconds...")
+        initial_count = self.change_tracker['events_received']
+        await asyncio.sleep(5)
+        events_during_test = self.change_tracker['events_received'] - initial_count
+        
+        if events_during_test > 0:
+            logger.info(f"✅ Events working! Received {events_during_test} events during test")
+        else:
+            logger.warning("⚠️ No events received during test - events may not be actively sent by devices")
+    
+    def get_characteristic_name(self, char_type):
+        """Map characteristic UUID to human readable name."""
+        uuid_map = {
+            "00000011-0000-1000-8000-0026bb765291": "CurrentTemperature",
+            "00000035-0000-1000-8000-0026bb765291": "TargetTemperature", 
+            "0000000f-0000-1000-8000-0026bb765291": "CurrentHeatingCoolingState",
+            "00000033-0000-1000-8000-0026bb765291": "TargetHeatingCoolingState",
+            "00000036-0000-1000-8000-0026bb765291": "TemperatureDisplayUnits",
+            "00000010-0000-1000-8000-0026bb765291": "CurrentRelativeHumidity"
+        }
+        return uuid_map.get(char_type, f"Unknown_{char_type[:8]}")
+    
+    async def handle_unified_change(self, update_data, source="UNKNOWN"):
+        """Unified handler for all characteristic changes (events AND polling)."""
+        try:
+            # Extract change information
+            aid = update_data.get('aid')
+            iid = update_data.get('iid') 
+            value = update_data.get('value')
+            
+            if aid is None or iid is None:
+                logger.debug(f"Invalid change data from {source}: {update_data}")
+                return
+            
+            # Get characteristic info
+            char_key = (aid, iid)
+            char_name = getattr(self, 'characteristic_map', {}).get(char_key, f"aid{aid}_iid{iid}")
+            
+            # Skip TemperatureDisplayUnits changes - not interested in unit conversions
+            if 'TemperatureDisplayUnits' in char_name:
+                return
+            
+            # Check if this is actually a change
+            last_value = self.change_tracker['last_values'].get(char_key)
+            if last_value == value:
+                return  # No actual change
+            
+            # Store new value
+            self.change_tracker['last_values'][char_key] = value
+            
+            # Track change by source
+            if source == "EVENT":
+                self.change_tracker['events_received'] += 1
+                logger.info(f"🔔 EVENT: {char_name} aid={aid}, iid={iid}: {last_value} → {value}")
+            elif source == "POLLING":
+                self.change_tracker['polling_changes'] += 1
+                logger.info(f"📊 POLL: {char_name} aid={aid}, iid={iid}: {last_value} → {value}")
+            
+            # Send to event stream for clients
+            event_data = {
+                'source': source,
+                'timestamp': time.time(),
+                'aid': aid,
+                'iid': iid,
+                'characteristic': char_name,
+                'value': value,
+                'previous_value': last_value
+            }
+            await self.broadcast_event(event_data)
             
         except Exception as e:
-            logger.warning(f"Failed to setup event listeners: {e}")
+            logger.error(f"Error handling unified change: {e}")
+    
+    async def broadcast_event(self, event_data):
+        """Broadcast change event to all connected SSE clients."""
+        try:
+            event_json = json.dumps(event_data)
+            event_message = f"data: {event_json}\n\n"
+            
+            # Send to all connected event listeners
+            disconnected_listeners = []
+            for listener in self.event_listeners:
+                try:
+                    await listener.put(event_message)
+                except:
+                    disconnected_listeners.append(listener)
+            
+            # Remove disconnected listeners
+            for listener in disconnected_listeners:
+                if listener in self.event_listeners:
+                    self.event_listeners.remove(listener)
+                    
+        except Exception as e:
+            logger.error(f"Error broadcasting event: {e}")
+    
+    async def setup_polling_system(self):
+        """Setup polling system for comparison with events."""
+        try:
+            # Find all interesting characteristics for polling (not just temperature)
+            self.poll_chars = []
+            for accessory in self.accessories_cache:
+                aid = accessory["aid"]
+                for service in accessory["services"]:
+                    for char in service["characteristics"]:
+                        char_type = char.get("type", "").lower()
+                        perms = char.get("perms", [])
+                        
+                        # Poll all the same characteristics that support events
+                        if "pr" in perms and char_type in [
+                            "00000011-0000-1000-8000-0026bb765291",  # CurrentTemperature
+                            "00000035-0000-1000-8000-0026bb765291",  # TargetTemperature
+                            "0000000f-0000-1000-8000-0026bb765291",  # CurrentHeatingCoolingState
+                            "00000033-0000-1000-8000-0026bb765291",  # TargetHeatingCoolingState
+                            #"00000036-0000-1000-8000-0026bb765291",  # TemperatureDisplayUnits
+                            "00000010-0000-1000-8000-0026bb765291"   # CurrentRelativeHumidity
+                        ]:
+                            self.poll_chars.append((aid, char["iid"]))
+                            char_name = self.get_characteristic_name(char_type)
+                            logger.debug(f"Poll char: aid={aid}, iid={char['iid']}, type={char_name}")
+                            
+            if self.poll_chars:
+                logger.info(f"Found {len(self.poll_chars)} characteristics for polling comparison")
+                # Store for the polling loop to use
+                self.monitored_characteristics = self.poll_chars
+                # Start background polling task
+                asyncio.create_task(self.background_polling_loop())
+                logger.info("Background polling system started")
+            else:
+                logger.warning("No characteristics found for polling")
+                
+        except Exception as e:
+            logger.warning(f"Failed to setup polling system: {e}")
+    
+    async def background_polling_loop(self):
+        """Background task that polls all monitored characteristics every 30 seconds."""
+        poll_interval = 30  # seconds
+        
+        while True:
+            try:
+                await asyncio.sleep(poll_interval)
+                
+                if not self.pairing or not hasattr(self, 'monitored_characteristics'):
+                    continue
+                    
+                logger.debug(f"Starting polling cycle for {len(self.monitored_characteristics)} characteristics")
+                
+                # Poll all monitored characteristics
+                for aid, iid in self.monitored_characteristics:
+                    try:
+                        result = await self.pairing.get_characteristics([(aid, iid)])
+                        if result and (aid, iid) in result:
+                            char_data = result[(aid, iid)]
+                            value = char_data.get('value')
+                            
+                            # Create proper update_data format for unified change handler
+                            update_data = {
+                                'aid': aid,
+                                'iid': iid,
+                                'value': value
+                            }
+                            
+                            # Use the unified change handler
+                            await self.handle_unified_change(update_data, "POLLING")
+                            
+                    except Exception as e:
+                        logger.error(f"Error polling aid={aid}, iid={iid}: {e}")
+                        
+            except Exception as e:
+                logger.error(f"Background polling error: {e}")
+                await asyncio.sleep(5)  # Short delay before retrying
     
     async def handle_homekit_event(self, event_data):
         """Handle incoming HomeKit events and update device states."""
         try:
-            # Update device states from HomeKit events
+            # Update device states from HomeKit events (if any events still come through)
             aid = event_data.get('aid')
             iid = event_data.get('iid') 
             value = event_data.get('value')
@@ -980,7 +1215,7 @@ class TadoLocalAPI:
                     except:
                         pass  # Queue might be closed
                         
-                logger.debug(f"Updated device state: aid={aid}, iid={iid}, value={value}")
+                logger.debug(f"Updated device state from event: aid={aid}, iid={iid}, value={value}")
                 
         except Exception as e:
             logger.error(f"Error handling HomeKit event: {e}")
@@ -1181,8 +1416,7 @@ async def get_thermostats():
             if service.get('type') == '0000004A-0000-1000-8000-0026BB765291':
                 
                 thermostat = {
-                    'accessory_id': accessory.get('aid'),
-                    'service_id': service.get('iid'),
+                    'aid': accessory.get('aid'),
                     'name': accessory.get('name', f"Thermostat {accessory.get('aid')}"),
                     'current_temperature': None,
                     'target_temperature': None,
@@ -1196,15 +1430,17 @@ async def get_thermostats():
                     char_type = char.get('type')
                     char_value = char.get('value')
                     
-                    if char_type == 'public.hap.characteristic.current-temperature':
+                    if char_type == '00000023-0000-1000-8000-0026BB765291':
+                        thermostat['name'] = char_value
+                    if char_type == '00000011-0000-1000-8000-0026BB765291':
                         thermostat['current_temperature'] = char_value
-                    elif char_type == 'public.hap.characteristic.target-temperature':
+                    elif char_type == '00000035-0000-1000-8000-0026BB765291':
                         thermostat['target_temperature'] = char_value
-                    elif char_type == 'public.hap.characteristic.current-heating-cooling-state':
+                    elif char_type == '0000000F-0000-1000-8000-0026BB765291':
                         thermostat['heating_state'] = char_value
-                    elif char_type == 'public.hap.characteristic.target-heating-cooling-state':
+                    elif char_type == '00000033-0000-1000-8000-0026BB765291':
                         thermostat['target_heating_state'] = char_value
-                    elif char_type == 'public.hap.characteristic.current-relative-humidity':
+                    elif char_type == '00000010-0000-1000-8000-0026BB765291':
                         thermostat['humidity'] = char_value
                 
                 thermostats.append(thermostat)
@@ -1318,6 +1554,8 @@ async def main(args):
         server = uvicorn.Server(config)
         await server.serve()
         
+    except KeyboardInterrupt:
+        logger.info("🛑 Keyboard interrupt received, shutting down gracefully...")
     except Exception as e:
         logger.error(f"❌ Failed to start Tado Local API: {e}")
         raise
@@ -1360,4 +1598,11 @@ API Endpoints:
                        help="Clear all existing pairings from database before starting")
     args = parser.parse_args()
 
-    asyncio.run(main(args))
+    # Run with proper error handling
+    try:
+        asyncio.run(main(args))
+    except KeyboardInterrupt:
+        print("\n🛑 Shutdown complete")
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+        exit(1)
