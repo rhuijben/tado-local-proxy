@@ -19,6 +19,8 @@ import uvicorn
 import asyncio
 import time
 from typing import Dict, List, Any, Optional
+
+from homekit_uuids import enhance_accessory_data, get_service_name, get_characteristic_name
 from collections import defaultdict
 import logging
 
@@ -938,7 +940,7 @@ class TadoLocalAPI:
         try:
             self.accessories_cache = await self.pairing.list_accessories_and_characteristics()
             self.last_update = time.time()
-            logger.info(f"Refreshed {len(self.accessories_cache.get('accessories', []))} accessories")
+            logger.info(f"Refreshed {len(self.accessories_cache)} accessories")
             return self.accessories_cache
         except Exception as e:
             logger.error(f"Failed to refresh accessories: {e}")
@@ -956,7 +958,7 @@ class TadoLocalAPI:
                 asyncio.create_task(self.handle_homekit_event(update_data))
             
             # Subscribe to all accessories for updates
-            await self.pairing.subscribe(self.accessories_cache.get('accessories', []))
+            await self.pairing.subscribe(self.accessories_cache)
             logger.info("HomeKit event listeners setup successfully")
             
         except Exception as e:
@@ -1023,7 +1025,7 @@ async def get_status():
             "status": "connected",
             "bridge_connected": True,
             "last_update": tado_api.last_update,
-            "cached_accessories": len(tado_api.accessories_cache.get('accessories', [])),
+            "cached_accessories": len(tado_api.accessories_cache),
             "active_listeners": len(tado_api.event_listeners),
             "uptime": time.time() - (tado_api.last_update or time.time())
         }
@@ -1035,22 +1037,93 @@ async def get_status():
         }
 
 @app.get("/accessories", tags=["HomeKit"])
-async def get_accessories():
-    """Get all HomeKit accessories and their characteristics."""
-    return await tado_api.refresh_accessories()
+async def get_accessories(enhanced: bool = True):
+    """
+    Get all HomeKit accessories and their characteristics.
+    
+    Args:
+        enhanced: If True, include human-readable names for UUIDs (default: True)
+    """
+    accessories = await tado_api.refresh_accessories()
+    
+    if enhanced:
+        return {
+            "accessories": enhance_accessory_data(accessories),
+            "enhanced": True,
+            "note": "UUIDs have been enhanced with human-readable names. Use ?enhanced=false for raw data."
+        }
+    else:
+        return {
+            "accessories": accessories,
+            "enhanced": False
+        }
 
 @app.get("/accessories/{accessory_id}", tags=["HomeKit"])  
-async def get_accessory(accessory_id: int):
-    """Get specific accessory by ID."""
+async def get_accessory(accessory_id: int, enhanced: bool = True):
+    """
+    Get specific accessory by ID.
+    
+    Args:
+        accessory_id: The HomeKit accessory ID
+        enhanced: If True, include human-readable names for UUIDs (default: True)
+    """
     if not tado_api.accessories_cache:
         await tado_api.refresh_accessories()
     
-    accessories = tado_api.accessories_cache.get('accessories', [])
+    accessories = tado_api.accessories_cache
     for accessory in accessories:
         if accessory.get('aid') == accessory_id:
-            return accessory
+            if enhanced:
+                enhanced_accessories = enhance_accessory_data([accessory])
+                return {
+                    "accessory": enhanced_accessories[0] if enhanced_accessories else accessory,
+                    "enhanced": True
+                }
+            else:
+                return {
+                    "accessory": accessory,
+                    "enhanced": False
+                }
     
     raise HTTPException(status_code=404, detail=f"Accessory {accessory_id} not found")
+
+@app.get("/homekit/uuid-mappings", tags=["HomeKit"])
+async def get_uuid_mappings():
+    """
+    Get all HomeKit UUID mappings found in the current system.
+    Shows which services and characteristics are being used by your Tado devices.
+    """
+    if not tado_api.accessories_cache:
+        await tado_api.refresh_accessories()
+    
+    # Collect all unique UUIDs from the current accessories
+    service_uuids = set()
+    characteristic_uuids = set()
+    
+    for accessory in tado_api.accessories_cache:
+        for service in accessory.get('services', []):
+            service_uuids.add(service.get('type'))
+            for char in service.get('characteristics', []):
+                characteristic_uuids.add(char.get('type'))
+    
+    # Create mappings with names
+    services_found = {}
+    for uuid in sorted(service_uuids):
+        services_found[uuid] = get_service_name(uuid)
+    
+    characteristics_found = {}
+    for uuid in sorted(characteristic_uuids):
+        characteristics_found[uuid] = get_characteristic_name(uuid)
+    
+    return {
+        "services": services_found,
+        "characteristics": characteristics_found,
+        "summary": {
+            "total_services": len(services_found),
+            "total_characteristics": len(characteristics_found),
+            "accessories_scanned": len(tado_api.accessories_cache)
+        }
+    }
 
 @app.get("/zones", tags=["Tado"])
 async def get_zones():
@@ -1059,7 +1132,7 @@ async def get_zones():
         await tado_api.refresh_accessories()
     
     zones = []
-    accessories = tado_api.accessories_cache.get('accessories', [])
+    accessories = tado_api.accessories_cache
     
     for accessory in accessories:
         services = accessory.get('services', [])
@@ -1105,7 +1178,7 @@ async def get_thermostats():
         await tado_api.refresh_accessories()
     
     thermostats = []
-    accessories = tado_api.accessories_cache.get('accessories', [])
+    accessories = tado_api.accessories_cache
     
     for accessory in accessories:
         services = accessory.get('services', [])
@@ -1151,7 +1224,7 @@ async def set_thermostat_temperature(accessory_id: int, temperature: float):
     
     try:
         # Find the thermostat service and target temperature characteristic
-        accessories = tado_api.accessories_cache.get('accessories', [])
+        accessories = tado_api.accessories_cache
         
         for accessory in accessories:
             if accessory.get('aid') == accessory_id:
