@@ -17,10 +17,13 @@ One limitation of this, is that the TADO internet bridge currenly allows only a 
 Things are currently in the very early stages of development. I'm able to connect to the bridge and expose the current data
 
 To setup things you run the first time
+
 `$ python proxy.py --state ~/.state.db --bridge-ip 192.168.0.233 --pin 123-45-678 --port 8091`
+
 This does the initial pairing and stores the connection state in state.db and then starts listening on port 8091
 
 After this you can restart the service as just
+
 `$ python proxy.py --state state.db --port 8091`
 
 If the internet bridge is already paired this will fail. You will have to clear the initial pairing from the current controller or by resetting the pairing on the bridge. On my V3 controller this works by pressing the small reset button on the back for about ten seconds. See this [TADO Article](https://support.tado.com/en/articles/3387334-how-can-i-reset-the-homekit-configuration-of-the-internet-bridge)
