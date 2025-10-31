@@ -165,53 +165,6 @@ def register_routes(app: FastAPI, get_tado_api):
         
         raise HTTPException(status_code=404, detail=f"Accessory {accessory_id} not found")
 
-    @app.get("/zones", tags=["Tado"])
-    async def get_zones_legacy():
-        """Get all Tado zones (thermostats, radiator controls, etc) - legacy endpoint."""
-        tado_api = get_tado_api()
-        if not tado_api.accessories_cache:
-            await tado_api.refresh_accessories()
-        
-        zones = []
-        accessories = tado_api.accessories_cache
-        
-        for accessory in accessories:
-            services = accessory.get('services', [])
-            for service in services:
-                service_type = service.get('type')
-                
-                # Look for thermostat and other HVAC services
-                if service_type in ['public.hap.service.thermostat', 
-                                   'public.hap.service.heater-cooler',
-                                   'public.hap.service.temperature-sensor']:
-                    
-                    zone_info = {
-                        'accessory_id': accessory.get('aid'),
-                        'service_id': service.get('iid'),
-                        'service_type': service_type,
-                        'characteristics': {}
-                    }
-                    
-                    # Extract relevant characteristics
-                    for char in service.get('characteristics', []):
-                        char_type = char.get('type')
-                        char_value = char.get('value')
-                        
-                        if char_type == 'public.hap.characteristic.current-temperature':
-                            zone_info['characteristics']['current_temperature'] = char_value
-                        elif char_type == 'public.hap.characteristic.target-temperature':
-                            zone_info['characteristics']['target_temperature'] = char_value
-                        elif char_type == 'public.hap.characteristic.current-heating-cooling-state':
-                            zone_info['characteristics']['heating_state'] = char_value
-                        elif char_type == 'public.hap.characteristic.target-heating-cooling-state':
-                            zone_info['characteristics']['target_heating_state'] = char_value
-                        elif char_type == 'public.hap.characteristic.current-relative-humidity':
-                            zone_info['characteristics']['humidity'] = char_value
-                    
-                    zones.append(zone_info)
-        
-        return {"zones": zones, "count": len(zones)}
-
     @app.get("/thermostats", tags=["Tado"])
     async def get_thermostats():
         """Get all thermostat devices with current and target temperatures - uses live state."""

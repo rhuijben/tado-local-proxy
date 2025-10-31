@@ -54,6 +54,11 @@ class TadoLocalAPI:
         self.state_manager = DeviceStateManager(db_path)
         self.is_initializing = False  # Flag to suppress logging during startup
         
+        # Cleanup tracking
+        self.subscribed_characteristics: List[tuple[int, int]] = []
+        self.background_tasks: List[asyncio.Task] = []
+        self.is_shutting_down = False
+        
     async def initialize(self, pairing: IpPairing):
         """Initialize the API with a HomeKit pairing."""
         self.pairing = pairing
@@ -63,6 +68,44 @@ class TadoLocalAPI:
         self.is_initializing = False  # Re-enable change logging
         await self.setup_event_listeners()
         logger.info("Tado Local API initialized successfully")
+    
+    async def cleanup(self):
+        """Clean up resources and unsubscribe from events."""
+        logger.info("Starting cleanup...")
+        self.is_shutting_down = True
+        
+        # Cancel all background tasks
+        if self.background_tasks:
+            logger.info(f"Cancelling {len(self.background_tasks)} background tasks")
+            for task in self.background_tasks:
+                if not task.done():
+                    task.cancel()
+            
+            # Wait for tasks to complete cancellation
+            await asyncio.gather(*self.background_tasks, return_exceptions=True)
+            logger.info("Background tasks cancelled")
+        
+        # Unsubscribe from all event characteristics
+        if self.pairing and self.subscribed_characteristics:
+            try:
+                logger.info(f"Unsubscribing from {len(self.subscribed_characteristics)} event characteristics")
+                await self.pairing.unsubscribe(self.subscribed_characteristics)
+                logger.info("Successfully unsubscribed from events")
+            except Exception as e:
+                logger.warning(f"Error during unsubscribe: {e}")
+        
+        # Close all event listener queues
+        if self.event_listeners:
+            logger.info(f"Closing {len(self.event_listeners)} event listener queues")
+            for queue in self.event_listeners:
+                try:
+                    # Signal end of stream
+                    await queue.put(None)
+                except:
+                    pass  # Queue might already be closed
+            self.event_listeners.clear()
+        
+        logger.info("Cleanup complete")
         
     async def refresh_accessories(self):
         """Refresh accessories from HomeKit and cache them."""
@@ -288,6 +331,8 @@ class TadoLocalAPI:
             if all_event_characteristics:
                 # Subscribe to ALL event characteristics at once - this is critical!
                 await self.pairing.subscribe(all_event_characteristics)
+                # Track subscriptions for cleanup
+                self.subscribed_characteristics = all_event_characteristics.copy()
                 logger.info(f"Subscribed to {len(all_event_characteristics)} event characteristics")
                 logger.debug(f"Characteristic map: {self.characteristic_map}")
                                 
@@ -381,7 +426,7 @@ class TadoLocalAPI:
             # Skip logging during initialization
             if not self.is_initializing:
                 # Track change by source and log with nice format
-                src = "EVENT" if source == "E" else "P"
+                src = "E" if source == "EVENT" else "P"
                 if source == "EVENT":
                     self.change_tracker['events_received'] += 1
                 else:
@@ -450,8 +495,9 @@ class TadoLocalAPI:
                 logger.info(f"Found {len(self.poll_chars)} characteristics for polling")
                 # Store for the polling loop to use
                 self.monitored_characteristics = self.poll_chars
-                # Start background polling task
-                asyncio.create_task(self.background_polling_loop())
+                # Start background polling task and track it
+                task = asyncio.create_task(self.background_polling_loop())
+                self.background_tasks.append(task)
                 logger.info("Background polling system started")
             else:
                 logger.warning("No characteristics found for polling")
@@ -477,18 +523,18 @@ class TadoLocalAPI:
             char_key = (aid, iid)
             char_name = self.characteristic_map.get(char_key, "")
             
-            # Add humidity and battery to priority list
-            if 'humidity' in char_name.lower() or 'battery' in char_name.lower():
+            # Add humidity to priority list
+            if 'humidity' in char_name.lower():
                 priority_chars.add((aid, iid))
         
         if priority_chars:
-            logger.info(f"Fast polling ({fast_poll_interval}s) for {len(priority_chars)} priority characteristics (humidity, battery)")
-            logger.info(f"Normal polling ({slow_poll_interval}s) for {len(self.monitored_characteristics) - len(priority_chars)} other characteristics")
+            logger.info(f"Fast polling ({fast_poll_interval}s) for {len(priority_chars)} characteristics")
+            logger.info(f"Normal polling ({slow_poll_interval}s) for {len(self.monitored_characteristics) - len(priority_chars)} characteristics")
         
         last_fast_poll = 0
         last_slow_poll = 0
         
-        while True:
+        while not self.is_shutting_down:
             try:
                 current_time = time.time()
                 await asyncio.sleep(10)  # Check every 10 seconds

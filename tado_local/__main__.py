@@ -85,6 +85,11 @@ async def run_server(args):
     except Exception as e:
         logger.error(f"ERROR: Failed to start Tado Local API: {e}")
         raise
+    finally:
+        # Clean up resources
+        if tado_api:
+            logger.info("Performing cleanup...")
+            await tado_api.cleanup()
 
 def main():
     """Main entry point for the CLI."""
