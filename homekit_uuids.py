@@ -42,7 +42,6 @@ HOMEKIT_SERVICES = {
 
 # HomeKit Characteristic Type UUIDs
 # All UUIDs verified against official Apple HomeKit specifications from HAP-NodeJS repository
-# Last verified: 2024 - KhaosT/HAP-NodeJS (Official Apple HomeKit Implementation)
 HOMEKIT_CHARACTERISTICS = {
     # === BASIC INFORMATION CHARACTERISTICS ===
     # Required for AccessoryInformation service per Apple HomeKit specification
@@ -272,17 +271,23 @@ TADO_CHARACTERISTICS = {
 
 def get_service_name(uuid: str) -> str:
     """Convert HomeKit service UUID to human-readable name."""
+    # Normalize UUID to uppercase for lookup
+    uuid_upper = uuid.upper()
+    
     # Check Tado custom first, then Apple standard
-    if uuid in TADO_SERVICES:
-        return TADO_SERVICES[uuid]
-    return HOMEKIT_SERVICES.get(uuid, uuid)
+    if uuid_upper in TADO_SERVICES:
+        return TADO_SERVICES[uuid_upper]
+    return HOMEKIT_SERVICES.get(uuid_upper, uuid)
 
 def get_characteristic_name(uuid: str) -> str:
     """Convert HomeKit characteristic UUID to human-readable name."""
+    # Normalize UUID to uppercase for lookup
+    uuid_upper = uuid.upper()
+    
     # Check Tado custom first, then Apple standard
-    if uuid in TADO_CHARACTERISTICS:
-        return TADO_CHARACTERISTICS[uuid]
-    return HOMEKIT_CHARACTERISTICS.get(uuid, uuid)
+    if uuid_upper in TADO_CHARACTERISTICS:
+        return TADO_CHARACTERISTICS[uuid_upper]
+    return HOMEKIT_CHARACTERISTICS.get(uuid_upper, uuid)
 
 def get_characteristic_value_name(characteristic_name: str, value) -> str:
     """Convert HomeKit characteristic value to human-readable name."""
@@ -304,7 +309,9 @@ def enhance_accessory_data(accessories):
     
     for accessory in accessories:
         enhanced_accessory = {
+            "id": accessory.get("id"),
             "aid": accessory.get("aid"),
+            "serial_number": accessory.get("serial_number"),
             "services": []
         }
         
