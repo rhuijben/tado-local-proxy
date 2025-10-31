@@ -1,0 +1,5 @@
+aiohomekit>=3.0.0
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
+cryptography>=41.0.0
+zeroconf>=0.115.0
