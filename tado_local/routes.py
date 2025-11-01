@@ -75,6 +75,7 @@ def register_routes(app: FastAPI, get_tado_api):
                 "thermostats": "/thermostats",
                 "thermostat_by_id": "/thermostats/{id}",
                 "events": "/events",
+                "events_zones": "/events/zones",
                 "refresh": "/refresh",
                 "debug_characteristics": "/debug/characteristics",
                 "debug_humidity": "/debug/humidity"
@@ -916,6 +917,88 @@ def register_routes(app: FastAPI, get_tado_api):
                 # Remove this client's queue
                 if client_queue in tado_api.event_listeners:
                     tado_api.event_listeners.remove(client_queue)
+        
+        return StreamingResponse(
+            event_publisher(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Content-Type": "text/event-stream"
+            }
+        )
+
+    @app.get("/events/zones", tags=["Events"])
+    async def get_zone_events():
+        """
+        Server-Sent Events (SSE) endpoint for zone-only updates.
+        
+        This endpoint only sends zone-level state changes, not individual device events.
+        Useful for clients that only need zone aggregation without device details.
+        
+        Event Types:
+        
+        1. Zone State Change:
+           {
+               "type": "zone",
+               "zone_id": 4,
+               "zone_name": "Studeerkamer",
+               "state": {
+                   "cur_temp_c": 21.5,
+                   "cur_temp_f": 70.7,
+                   "hum_perc": 55,
+                   "target_temp_c": 21.0,
+                   "target_temp_f": 69.8,
+                   "mode": 1,
+                   "cur_heating": 1
+               },
+               "timestamp": 1730477890.123
+           }
+        
+        2. Keepalive (every 30 seconds):
+           {
+               "type": "keepalive",
+               "timestamp": 1730477890.123
+           }
+        
+        State Field Reference:
+            mode: 0=Off, 1=Heat (TargetHeatingCoolingState)
+            cur_heating: 0=Off, 1=Heating, 2=Cooling (CurrentHeatingCoolingState)
+            Temperatures provided in both Celsius (_c) and Fahrenheit (_f)
+        
+        Usage Example:
+            const eventSource = new EventSource('/events/zones');
+            eventSource.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                
+                if (data.type === 'zone') {
+                    updateZone(data.zone_id, data.state);
+                }
+            };
+        """
+        tado_api = get_tado_api()
+        
+        async def event_publisher():
+            # Create a queue for this client
+            client_queue = asyncio.Queue()
+            tado_api.zone_event_listeners.append(client_queue)
+            
+            try:
+                while True:
+                    # Wait for events
+                    try:
+                        event_data = await asyncio.wait_for(client_queue.get(), timeout=30)
+                        yield event_data
+                    except asyncio.TimeoutError:
+                        # Send keepalive
+                        yield f"data: {json.dumps({'type': 'keepalive', 'timestamp': time.time()})}\n\n"
+                        
+            except asyncio.CancelledError:
+                pass
+            finally:
+                # Remove this client's queue
+                if client_queue in tado_api.zone_event_listeners:
+                    tado_api.zone_event_listeners.remove(client_queue)
         
         return StreamingResponse(
             event_publisher(),

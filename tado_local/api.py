@@ -50,8 +50,10 @@ class TadoLocalAPI:
         self.characteristic_map = {}
         self.device_to_characteristics = {}
         self.event_listeners: List[asyncio.Queue] = []
+        self.zone_event_listeners: List[asyncio.Queue] = []  # Zone-only listeners
         self.last_update: Optional[float] = None
         self.device_states: Dict[str, Dict[str, Any]] = defaultdict(dict)
+        self.last_zone_states: Dict[int, Dict[str, Any]] = {}  # Track zone states to deduplicate
         self.state_manager = DeviceStateManager(db_path)
         self.is_initializing = False  # Flag to suppress logging during startup
         
@@ -105,6 +107,17 @@ class TadoLocalAPI:
                 except:
                     pass  # Queue might already be closed
             self.event_listeners.clear()
+        
+        # Close zone-only event listener queues
+        if self.zone_event_listeners:
+            logger.info(f"Closing {len(self.zone_event_listeners)} zone event listener queues")
+            for queue in self.zone_event_listeners:
+                try:
+                    # Signal end of stream
+                    await queue.put(None)
+                except:
+                    pass  # Queue might already be closed
+            self.zone_event_listeners.clear()
         
         logger.info("Cleanup complete")
         
@@ -459,9 +472,17 @@ class TadoLocalAPI:
             event_json = json.dumps(event_data)
             event_message = f"data: {event_json}\n\n"
             
+            # Determine which listeners should receive this event
+            if event_data.get('type') == 'zone':
+                # Zone events go to both all-events and zone-only listeners
+                target_listeners = self.event_listeners + self.zone_event_listeners
+            else:
+                # Device and other events only go to all-events listeners
+                target_listeners = self.event_listeners
+            
             # Send to all connected event listeners
             disconnected_listeners = []
-            for listener in self.event_listeners:
+            for listener in target_listeners:
                 try:
                     await listener.put(event_message)
                 except:
@@ -471,6 +492,8 @@ class TadoLocalAPI:
             for listener in disconnected_listeners:
                 if listener in self.event_listeners:
                     self.event_listeners.remove(listener)
+                if listener in self.zone_event_listeners:
+                    self.zone_event_listeners.remove(listener)
                     
         except Exception as e:
             logger.error(f"Error broadcasting event: {e}")
@@ -512,14 +535,13 @@ class TadoLocalAPI:
         Sends standardized state updates for both the device and its zone (if assigned).
         """
         try:
-            # Get device info
+            # Get device info from cache
             device_info = self.state_manager.get_device_info(device_id)
             if not device_info:
                 return
             
             serial = device_info.get('serial_number')
-            is_zone_leader = device_info.get('is_zone_leader', False)
-            is_circuit_driver = device_info.get('is_circuit_driver', False)
+            zone_id = device_info.get('zone_id')
             
             # Build device state
             device_state = self._build_device_state(device_id)
@@ -536,18 +558,11 @@ class TadoLocalAPI:
             await self.broadcast_event(device_event)
             
             # Also broadcast zone state if device is assigned to a zone
-            conn = sqlite3.connect(self.state_manager.db_path)
-            cursor = conn.execute("""
-                SELECT z.zone_id, z.name, z.leader_device_id, d.is_circuit_driver
-                FROM devices d
-                JOIN zones z ON d.zone_id = z.zone_id
-                LEFT JOIN devices leader ON z.leader_device_id = leader.device_id
-                WHERE d.device_id = ?
-            """, (device_id,))
-            row = cursor.fetchone()
-            
-            if row:
-                zone_id, zone_name, leader_device_id, leader_is_circuit = row
+            if zone_id and zone_id in self.state_manager.zone_cache:
+                zone_info = self.state_manager.zone_cache[zone_id]
+                zone_name = zone_info['name']
+                leader_device_id = zone_info['leader_device_id']
+                is_circuit_driver = zone_info['is_circuit_driver']
                 
                 # Get leader state for zone
                 if leader_device_id:
@@ -564,36 +579,42 @@ class TadoLocalAPI:
                         'cur_heating': 0
                     }
                     
-                    # Apply circuit driver logic for heating states
-                    if leader_is_circuit:
-                        # Circuit driver - check radiator valves in zone
-                        valve_cursor = conn.execute("""
-                            SELECT device_id FROM devices 
-                            WHERE zone_id = ? AND is_circuit_driver = 0
-                        """, (zone_id,))
+                    # Apply circuit driver logic for heating states (using cache)
+                    if is_circuit_driver:
+                        # Circuit driver - check radiator valves in zone (from cache)
+                        other_devices = [dev_id for dev_id, dev_info in self.state_manager.device_info_cache.items()
+                                        if dev_info.get('zone_id') == zone_id and not dev_info.get('is_circuit_driver')]
                         
-                        for (valve_id,) in valve_cursor.fetchall():
-                            valve_state = self._build_device_state(valve_id)
-                            if valve_state['mode'] == 1:
-                                zone_state['mode'] = 1
-                            if valve_state['cur_heating'] == 1:
-                                zone_state['cur_heating'] = 1
+                        if other_devices:
+                            for valve_id in other_devices:
+                                valve_state = self._build_device_state(valve_id)
+                                if valve_state and valve_state.get('mode') == 1:
+                                    zone_state['mode'] = 1
+                                if valve_state and valve_state.get('cur_heating') == 1:
+                                    zone_state['cur_heating'] = 1
+                        else:
+                            # Circuit driver alone in zone - use its own state
+                            zone_state['mode'] = leader_state['mode']
+                            zone_state['cur_heating'] = leader_state['cur_heating']
                     else:
                         # Regular device - use leader state
                         zone_state['mode'] = leader_state['mode']
                         zone_state['cur_heating'] = leader_state['cur_heating']
                     
-                    # Broadcast zone state change
-                    zone_event = {
-                        'type': 'zone',
-                        'zone_id': zone_id,
-                        'zone_name': zone_name,
-                        'state': zone_state,
-                        'timestamp': time.time()
-                    }
-                    await self.broadcast_event(zone_event)
-            
-            conn.close()
+                    # Only broadcast if zone state actually changed
+                    last_zone_state = self.last_zone_states.get(zone_id)
+                    if last_zone_state != zone_state:
+                        self.last_zone_states[zone_id] = zone_state.copy()
+                        
+                        # Broadcast zone state change
+                        zone_event = {
+                            'type': 'zone',
+                            'zone_id': zone_id,
+                            'zone_name': zone_name,
+                            'state': zone_state,
+                            'timestamp': time.time()
+                        }
+                        await self.broadcast_event(zone_event)
             
         except Exception as e:
             logger.debug(f"Error broadcasting state change: {e}")

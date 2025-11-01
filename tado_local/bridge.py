@@ -34,6 +34,7 @@ from aiohomekit.protocol import perform_pair_setup_part1, perform_pair_setup_par
 from aiohomekit.utils import check_pin_format, pair_with_auth
 from aiohomekit.controller import Controller
 
+# zeroconf import kept for initial pairing only - not needed for normal operation
 from zeroconf.asyncio import AsyncZeroconf
 
 from .cache import CharacteristicCacheSQLite
@@ -44,26 +45,26 @@ logger = logging.getLogger('tado-local')
 
 class TadoBridge:
     """Manages HomeKit bridge pairing and connection."""
-    
+
     @staticmethod
     async def get_or_create_controller_identity(db_path: str):
         """Get or create a persistent controller identity for HomeKit pairing."""
-        
+
         conn = sqlite3.connect(db_path)
         conn.executescript(DB_SCHEMA)
-        
+
         # Try to get existing controller identity
         cursor = conn.execute("SELECT controller_id, private_key, public_key FROM controller_identity LIMIT 1")
         row = cursor.fetchone()
-        
+
         if row:
             controller_id, private_key_bytes, public_key_bytes = row
             logger.debug(f"Using existing controller identity: {controller_id}")
-            
+
             # Deserialize keys
             private_key = serialization.load_der_private_key(private_key_bytes, password=None)
             public_key = private_key.public_key()
-            
+
             conn.close()
             return controller_id, private_key, public_key
         else:
@@ -71,7 +72,7 @@ class TadoBridge:
             controller_id = str(uuid.uuid4())
             private_key = Ed25519PrivateKey.generate()
             public_key = private_key.public_key()
-            
+
             # Serialize keys for storage
             private_key_bytes = private_key.private_bytes(
                 encoding=serialization.Encoding.DER,
@@ -82,7 +83,7 @@ class TadoBridge:
                 encoding=serialization.Encoding.DER,
                 format=serialization.PublicFormat.SubjectPublicKeyInfo
             )
-            
+
             # Store in database
             conn.execute(
                 "INSERT INTO controller_identity (controller_id, private_key, public_key) VALUES (?, ?, ?)",
@@ -90,7 +91,7 @@ class TadoBridge:
             )
             conn.commit()
             conn.close()
-            
+
             logger.info(f"Created new controller identity: {controller_id}")
             return controller_id, private_key, public_key
 
@@ -98,10 +99,10 @@ class TadoBridge:
     async def save_pairing_session(db_path: str, bridge_ip: str, controller_id: str, salt: bytes, public_key: bytes):
         """Save Part 1 pairing session state for potential resumption."""
         conn = sqlite3.connect(db_path)
-        
+
         # Clean up any old sessions for this bridge
         conn.execute("DELETE FROM pairing_sessions WHERE bridge_ip = ?", (bridge_ip,))
-        
+
         # Save new session
         conn.execute(
             "INSERT INTO pairing_sessions (bridge_ip, controller_id, session_state, part1_salt, part1_public_key) VALUES (?, ?, ?, ?, ?)",
@@ -121,7 +122,7 @@ class TadoBridge:
         )
         row = cursor.fetchone()
         conn.close()
-        
+
         if row:
             logger.debug("Found saved Part 1 pairing session")
             return row[0], row[1], row[2]  # controller_id, salt, public_key
@@ -141,13 +142,13 @@ class TadoBridge:
         # Default db path if not provided
         if not db_path:
             db_path = str(Path.home() / ".tado-local.db")
-        
+
         # Get or create persistent controller identity
         controller_id, private_key, public_key = await TadoBridge.get_or_create_controller_identity(db_path)
-        
+
         # Check if we have a saved Part 1 session we can resume from
         saved_session = await TadoBridge.get_pairing_session(db_path, host)
-        
+
         if saved_session:
             controller_id_saved, salt, part1_public_key = saved_session
             if controller_id_saved == controller_id:
@@ -160,7 +161,7 @@ class TadoBridge:
                 except Exception as e:
                     logger.warning(f"Failed to resume from saved session: {e}")
                     logger.info("Will start fresh pairing...")
-        
+
         # Perform fresh pairing with persistent identity
         return await TadoBridge.perform_fresh_pairing(host, port, pin, controller_id, db_path)
 
@@ -169,19 +170,19 @@ class TadoBridge:
         """Resume pairing from Part 2 using saved Part 1 state."""
 
         check_pin_format(pin)
-        
+
         logger.info(f"Resuming Part 2 with saved state for controller {controller_id[:8]}...")
-        
+
         connection = HomeKitConnection(owner=None, hosts=[host], port=port)
-        
+
         try:
             await connection.ensure_connection()
             logger.debug("Connection established for Part 2")
-            
+
             # Use saved Part 1 results with our controller ID
             state_machine = perform_pair_setup_part2(pin, controller_id, salt, part1_public_key)
             request, expected = state_machine.send(None)
-            
+
             try:
                 while True:
                     response = await connection.post_tlv(
@@ -193,13 +194,13 @@ class TadoBridge:
             except StopIteration as result:
                 pairing_data = result.value
                 logger.info("Part 2 successful - pairing complete using saved session!")
-                
+
                 pairing_data["AccessoryIP"] = host
                 pairing_data["AccessoryPort"] = port
                 pairing_data["Connection"] = "IP"
-                
+
                 return pairing_data
-                
+
         except Exception as e:
             logger.error(f"Part 2 resumption failed: {e}")
             raise
@@ -209,47 +210,47 @@ class TadoBridge:
     @staticmethod
     async def perform_fresh_pairing(host: str, port: int, pin: str, controller_id: str, db_path: str):
         """Perform fresh pairing with persistent controller identity."""
-        
+
         check_pin_format(pin)
-        
+
         logger.info(f"Starting fresh pairing with persistent controller {controller_id[:8]}...")
-        
+
         # Try different approaches as before, but with persistent controller ID
         approaches = [
             ("single_connection", "Keep connection open throughout"),
             ("reconnect_between_parts", "Reconnect between Part 1 and Part 2"),
         ]
-        
+
         for approach_name, approach_desc in approaches:
             logger.info(f"--- Trying approach: {approach_name} ---")
             logger.info(f"Description: {approach_desc}")
-            
+
             # Try different feature flag values for each approach
             feature_flag_variations = [0, 1]
-            
+
             for feature_flags in feature_flag_variations:
                 connection = None
                 try:
                     logger.debug(f"Trying feature flags: {feature_flags}")
-                    
+
                     # Create initial connection
                     logger.debug(f"Connecting to {host}:{port}...")
                     connection = HomeKitConnection(owner=None, hosts=[host], port=port)
                     await connection.ensure_connection()
                     logger.debug("Connection established")
-                    
+
                     # Part 1: Start pairing
                     logger.debug(f"Starting Part 1 with feature flags {feature_flags}...")
                     state_machine = perform_pair_setup_part1(pair_with_auth(feature_flags))
                     request, expected = state_machine.send(None)
-                    
+
                     logger.debug(f"Sending pair-setup request...")
                     response = await connection.post_tlv(
                         "/pair-setup",
                         body=request,
                         expected=expected,
                     )
-                    
+
                     # Continue Part 1 state machine
                     try:
                         request, expected = state_machine.send(response)
@@ -263,10 +264,10 @@ class TadoBridge:
                     except StopIteration as result:
                         salt, part1_public_key = result.value
                         logger.info(f"Part 1 successful with feature flags {feature_flags}")
-                        
+
                         # Save Part 1 state in case Part 2 fails
                         await TadoBridge.save_pairing_session(db_path, host, controller_id, salt, part1_public_key)
-                        
+
                         # Handle connection between parts based on approach
                         if approach_name == "reconnect_between_parts":
                             logger.debug("Closing and reopening connection between parts...")
@@ -275,13 +276,13 @@ class TadoBridge:
                             connection = HomeKitConnection(owner=None, hosts=[host], port=port)
                             await connection.ensure_connection()
                             logger.debug("Reconnected")
-                        
+
                         # Part 2: Complete pairing with PIN
                         logger.debug("Starting Part 2 with PIN...")
                         try:
                             state_machine = perform_pair_setup_part2(pin, controller_id, salt, part1_public_key)
                             request, expected = state_machine.send(None)
-                            
+
                             try:
                                 while True:
                                     response = await connection.post_tlv(
@@ -293,38 +294,38 @@ class TadoBridge:
                             except StopIteration as result:
                                 pairing_data = result.value
                                 logger.info(f"Part 2 successful with approach {approach_name}, feature flags {feature_flags}")
-                                
+
                                 # If we get here, pairing succeeded!
                                 logger.info(f"*** PAIRING SUCCESS! ***")
                                 logger.info(f"Successful approach: {approach_name}")
                                 logger.info(f"Feature flags: {feature_flags}")
                                 logger.info(f"Controller ID: {controller_id}")
-                                
+
                                 pairing_data["AccessoryIP"] = host
                                 pairing_data["AccessoryPort"] = port
                                 pairing_data["Connection"] = "IP"
-                                
+
                                 # Clear the saved session since we completed successfully
                                 await TadoBridge.clear_pairing_session(db_path, host)
-                                
+
                                 await connection.close()
                                 return pairing_data
-                                
+
                         except Exception as e:
                             logger.warning(f"Part 2 failed with approach {approach_name}, feature flags {feature_flags}: {e}")
                             logger.debug(f"Error type: {type(e)}")
                             logger.info("Part 1 state saved - you can retry and we'll attempt to resume from Part 2")
                             await connection.close()
                             continue
-                        
+
                 except Exception as e:
                     logger.warning(f"Overall attempt failed with approach {approach_name}, feature flags {feature_flags}: {e}")
                     if connection:
                         await connection.close()
                     continue
-            
+
             logger.info(f"--- Approach {approach_name} completed, trying next approach ---")
-        
+
         # If we get here, all attempts failed
         logger.error("============================================================")
         logger.error("ALL PAIRING ATTEMPTS FAILED")
@@ -336,7 +337,7 @@ class TadoBridge:
         logger.error("Part 1 state may be saved - retry might resume from Part 2")
         logger.error("Possible issues:")
         logger.error("1. Device is already paired to another HomeKit controller")
-        logger.error("2. Device is not in pairing mode") 
+        logger.error("2. Device is not in pairing mode")
         logger.error("3. Wrong PIN code")
         logger.error("4. Device needs to be reset/factory reset")
         logger.error("5. Network connectivity issues")
@@ -365,16 +366,16 @@ class TadoBridge:
 
         # Get all existing pairings
         all_pairings = conn.execute("SELECT bridge_ip, pairing_data FROM pairings").fetchall()
-        
+
         if all_pairings:
             logger.info(f"Found {len(all_pairings)} existing pairing(s):")
             for i, (ip, _) in enumerate(all_pairings):
                 logger.info(f"  {i+1}. {ip}")
-        
+
         # Auto-select pairing logic
         pairing_data = None
         selected_bridge_ip = None
-        
+
         if bridge_ip:
             # User specified a bridge IP, try to find that specific pairing
             row = conn.execute(
@@ -403,38 +404,40 @@ class TadoBridge:
         # If we have existing pairing data, test it first
         if pairing_data is not None:
             logger.info(f"=> Testing existing pairing for {selected_bridge_ip}...")
-            
+
             # Create a controller with proper async context
             try:
-                # Create async zeroconf instance 
-                zeroconf_instance = AsyncZeroconf()
-                
+                if False:
+                    zeroconf_instance = AsyncZeroconf()
+                else:
+                    zeroconf_instance = None
+
                 # Create SQLite-backed characteristic cache
                 char_cache = CharacteristicCacheSQLite(str(db_path))
-                
+
                 # Create controller with proper dependencies
                 controller = IpController(char_cache=char_cache, zeroconf_instance=zeroconf_instance)
-                
+
                 # Create pairing with controller instance
                 pairing = IpPairing(controller, pairing_data)
-                
+
                 # Test connection
                 await pairing._ensure_connected()
                 accessories = await pairing.list_accessories_and_characteristics()
                 logger.info(f"Successfully connected to {selected_bridge_ip}!")
                 logger.info(f"Found {len(accessories)} accessories")
-                
+
                 return pairing, selected_bridge_ip
-                
+
             except Exception as e:
                 logger.error(f"Failed to connect to existing pairing: {e}")
                 logger.warning(f"Connection failed, but keeping pairing data (may be temporary network issue)")
                 logger.info(f"To force re-pairing, delete the pairing manually or use --pin to create a new one")
-                
+
                 # DO NOT remove the pairing data automatically - it might just be a temporary issue
                 # conn.execute("DELETE FROM pairings WHERE bridge_ip = ?", (selected_bridge_ip,))
                 # conn.commit()
-                
+
                 # Still raise the error so we don't try to continue with a broken connection
                 raise RuntimeError(f"Failed to connect to existing pairing for {selected_bridge_ip}: {e}")
 
@@ -443,14 +446,19 @@ class TadoBridge:
             if not bridge_ip:
                 raise RuntimeError("Bridge IP required for initial pairing with PIN")
             logger.info(f"Starting fresh pairing with {bridge_ip} using PIN {pin}...")
-            
+
             try:
+                if False:
+                    zeroconf_instance = AsyncZeroconf()
+                else:
+                    zeroconf_instance = None
+
                 # Perform pairing using enhanced protocol with persistent controller identity
                 pairing_result = await TadoBridge.perform_pairing_with_controller(bridge_ip, 80, pin, str(db_path))
-                
+
                 # Use the pairing data as returned by the protocol
                 pairing_data = pairing_result
-                
+
                 # Save to DB
                 conn.execute(
                     "INSERT OR REPLACE INTO pairings (bridge_ip, pairing_data) VALUES (?, ?)",
@@ -458,23 +466,22 @@ class TadoBridge:
                 )
                 conn.commit()
                 logger.info("Pairing successful and saved to database!")
-                
+
                 # Create pairing instance with the new data
                 # Create a controller instance for the pairing
-                
-                zeroconf_instance = AsyncZeroconf()
+
                 char_cache = CharacteristicCacheSQLite(str(db_path))
                 controller = IpController(char_cache=char_cache, zeroconf_instance=zeroconf_instance)
                 pairing = IpPairing(controller, pairing_data)
                 await pairing._ensure_connected()
                 await pairing.list_accessories_and_characteristics()
                 logger.info("Connected and fetched accessories!")
-                
+
                 return pairing, bridge_ip
-                
+
             except Exception as e:
                 logger.error(f"Pairing failed: {e}")
-                
+
                 # Provide enhanced error messages based on Home Assistant's approach
                 if "UnavailableError" in str(type(e)) or "Unavailable" in str(e):
                     logger.error("" + "="*60)
@@ -512,7 +519,7 @@ class TadoBridge:
                     logger.error("Authentication error - check PIN or try resetting device.")
                 elif "BusyError" in str(type(e)) or "Busy" in str(e):
                     logger.error("Device is busy - wait a moment and try again.")
-                    
+
                 raise
 
         raise RuntimeError("No pairing data found and no PIN provided. Provide --pin to pair first.")
@@ -524,55 +531,58 @@ class TadoBridge:
         """
         try:
             logger.info(f"Starting controller-based pairing with {host}:{port} using PIN: {hap_pin}")
-            
+
             # Default db path if not provided
             if not db_path:
                 db_path = str(Path.home() / ".tado-local.db")
-            
+
             # Get or create persistent controller identity
             controller_id, private_key, public_key = await TadoBridge.get_or_create_controller_identity(db_path)
             logger.info(f"Using Controller ID: {controller_id}")
-            
+
             try:
                 # Create required dependencies for Controller
-                
-                # Create AsyncZeroconf instance
+                # Note: zeroconf is only needed for discovery, not for known IP pairing
+                # However, the Controller.start_pairing() method may require it temporarily
+
+                # Create AsyncZeroconf instance (needed for initial pairing only)
                 zeroconf_instance = AsyncZeroconf()
-                
+
                 # Create SQLite-backed characteristic cache
                 char_cache = CharacteristicCacheSQLite(db_path)
-                
+
                 # Create the main Controller (not IpController)
+                # This is only used for initial pairing - subsequent connections use IpController without zeroconf
                 controller = Controller(
                     async_zeroconf_instance=zeroconf_instance,
                     char_cache=char_cache
                 )
-                
+
                 logger.debug(f"Created controller with proper dependencies")
-                
+
                 # Start pairing using the controller's built-in method
                 logger.info(f"Starting pairing process...")
-                
+
                 # This should use the controller's pairing method which returns an IpPairing
                 pairing = await controller.start_pairing(host, hap_pin)
-                
+
                 logger.info(f"Pairing completed successfully!")
-                
-                # Clean up zeroconf instance
+
+                # Clean up zeroconf instance after pairing
                 await zeroconf_instance.async_close()
-                
+
                 # Extract pairing data in the correct format
                 pairing_data = pairing.pairing_data
-                
+
                 logger.info(f"PAIRING SUCCESS! Controller-based approach, Controller ID: {controller_id}")
-                
+
                 return pairing_data
-                
+
             except Exception as e:
                 logger.error(f"Controller-based pairing failed: {e}")
                 traceback.print_exc()
                 raise
-                
+
         except Exception as e:
             logger.error(f"Pairing failed with error: {e}")
             traceback.print_exc()
