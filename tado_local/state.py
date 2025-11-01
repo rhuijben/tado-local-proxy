@@ -57,7 +57,8 @@ class DeviceStateManager:
     def __init__(self, db_path: str):
         self.db_path = db_path
         self.device_id_cache: Dict[str, int] = {}  # serial_number -> device_id
-        self.device_info_cache: Dict[int, Dict[str, Any]] = {}  # device_id -> {name, zone_name, serial, etc}
+        self.aid_to_device_id: Dict[int, int] = {}  # aid -> device_id (bidirectional mapping)
+        self.device_info_cache: Dict[int, Dict[str, Any]] = {}  # device_id -> {name, zone_name, serial, aid, etc}
         self.current_state: Dict[int, Dict[str, Any]] = {}  # device_id -> current state
         self.last_saved_bucket: Dict[int, str] = {}  # device_id -> last saved bucket
         self.bucket_state_snapshot: Dict[int, Dict[str, Any]] = {}  # device_id -> state when bucket was saved
@@ -132,17 +133,21 @@ class DeviceStateManager:
         """Load device ID mappings and info from database."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.execute("""
-            SELECT d.device_id, d.serial_number, d.name, d.device_type, z.name as zone_name
+            SELECT d.device_id, d.serial_number, d.aid, d.name, d.device_type, z.name as zone_name, d.is_zone_leader
             FROM devices d
             LEFT JOIN zones z ON d.zone_id = z.zone_id
         """)
-        for device_id, serial_number, name, device_type, zone_name in cursor.fetchall():
+        for device_id, serial_number, aid, name, device_type, zone_name, is_zone_leader in cursor.fetchall():
             self.device_id_cache[serial_number] = device_id
+            if aid:
+                self.aid_to_device_id[aid] = device_id
             self.device_info_cache[device_id] = {
                 'serial_number': serial_number,
+                'aid': aid,
                 'name': name,
                 'device_type': device_type,
-                'zone_name': zone_name
+                'zone_name': zone_name,
+                'is_zone_leader': bool(is_zone_leader)
             }
         conn.close()
         logger.info(f"Loaded {len(self.device_id_cache)} devices from cache")
@@ -198,13 +203,38 @@ class DeviceStateManager:
         logger.info(f"Loaded latest state for {len(self.current_state)} devices from database")
     
     def get_device_info(self, device_id: int) -> Dict[str, Any]:
-        """Get cached device info including zone name."""
+        """Get cached device info including zone name, aid, etc."""
         return self.device_info_cache.get(device_id, {})
     
+    def get_device_id_by_aid(self, aid: int) -> Optional[int]:
+        """Get device_id from HomeKit accessory ID (aid)."""
+        return self.aid_to_device_id.get(aid)
+    
     def get_or_create_device(self, serial_number: str, aid: int, accessory_data: dict) -> int:
-        """Get or create device ID for a serial number."""
+        """Get or create device ID for a serial number, updating aid if needed."""
         if serial_number in self.device_id_cache:
-            return self.device_id_cache[serial_number]
+            device_id = self.device_id_cache[serial_number]
+            
+            # Update aid if it's not set or has changed
+            device_info = self.device_info_cache.get(device_id, {})
+            current_aid = device_info.get('aid')
+            
+            if current_aid != aid:
+                logger.info(f"Updating aid for device {device_id} ({serial_number}): {current_aid} -> {aid}")
+                conn = sqlite3.connect(self.db_path)
+                conn.execute("""
+                    UPDATE devices SET aid = ? WHERE device_id = ?
+                """, (aid, device_id))
+                conn.commit()
+                conn.close()
+                
+                # Update caches
+                if aid:
+                    self.aid_to_device_id[aid] = device_id
+                if device_info:
+                    device_info['aid'] = aid
+            
+            return device_id
         
         # Extract device info from accessory data
         device_type = "unknown"
@@ -234,6 +264,19 @@ class DeviceStateManager:
             elif service_type == '00000082-0000-1000-8000-0026bb765291':
                 device_type = "humidity_sensor"
         
+        # If device type still unknown, detect from serial number prefix
+        # Based on Tado Cloud API device types: IB01, RU02, VA02, etc.
+        if device_type == "unknown" and serial_number:
+            prefix = serial_number[:2].upper()
+            if prefix == "IB":
+                device_type = "internet_bridge"
+            elif prefix == "RU":
+                device_type = "thermostat"  # Room Unit / Smart Thermostat
+            elif prefix == "VA":
+                device_type = "radiator_valve"  # Smart Radiator Thermostat
+            elif prefix == "WR":
+                device_type = "wireless_receiver"  # Extension Kit
+        
         # Create device entry
         conn = sqlite3.connect(self.db_path)
         cursor = conn.execute("""
@@ -243,25 +286,30 @@ class DeviceStateManager:
         device_id = cursor.lastrowid
         conn.commit()
         
-        # Get zone_name if device has a zone assigned
+        # Get zone_name and is_zone_leader if device has a zone assigned
         zone_cursor = conn.execute("""
-            SELECT z.name 
+            SELECT z.name, d.is_zone_leader
             FROM devices d
             LEFT JOIN zones z ON d.zone_id = z.zone_id
             WHERE d.device_id = ?
         """, (device_id,))
         zone_row = zone_cursor.fetchone()
         zone_name = zone_row[0] if zone_row else None
+        is_zone_leader = bool(zone_row[1]) if zone_row and zone_row[1] is not None else False
         
         conn.close()
         
         # Update both caches
         self.device_id_cache[serial_number] = device_id
+        if aid:
+            self.aid_to_device_id[aid] = device_id
         self.device_info_cache[device_id] = {
             'serial_number': serial_number,
+            'aid': aid,
             'name': name,
             'device_type': device_type,
-            'zone_name': zone_name
+            'zone_name': zone_name,
+            'is_zone_leader': is_zone_leader
         }
         logger.info(f"Created device {device_id} for {serial_number} ({name})")
         

@@ -226,8 +226,17 @@ To start fresh:
 rm ~/.tado-local.db
 
 # Re-pair
-python proxy.py --bridge-ip 192.168.1.100 --pin 123-45-678
+python local.py --bridge-ip 192.168.1.100 --pin 123-45-678
+
+# Normal startup
+python local.py
+
+# More info
+python local.py --help
 ```
+
+In the log and on http://127.0.0.1:4407/status you will then find a url that you can use to authenticate to
+the TADO cloud service to complete the setup. This should be a one time setup as all state is stored in the sqlite backend.
 
 ## Architecture
 

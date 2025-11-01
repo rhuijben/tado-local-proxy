@@ -23,6 +23,34 @@ from typing import Dict, List, Any, Optional
 logger = logging.getLogger('tado-local')
 
 
+def normalize_device_type(tado_device_type: str) -> str:
+    """
+    Normalize Tado device type codes to friendly names.
+    
+    Args:
+        tado_device_type: Tado device type code (e.g., "IB01", "RU02", "VA02")
+        
+    Returns:
+        Normalized device type string
+    """
+    if not tado_device_type:
+        return "unknown"
+    
+    # Map Tado device type codes to friendly names
+    type_map = {
+        "IB01": "internet_bridge",
+        "RU01": "thermostat",
+        "RU02": "thermostat",
+        "VA01": "radiator_valve",
+        "VA02": "radiator_valve",
+        "WR01": "wireless_receiver",
+        "WR02": "wireless_receiver",
+        "SU02": "smart_ac_control",
+    }
+    
+    return type_map.get(tado_device_type.upper(), tado_device_type.lower())
+
+
 class TadoCloudSync:
     """Syncs Tado Cloud API data to local database."""
     
@@ -225,7 +253,8 @@ class TadoCloudSync:
                 
                 battery_state = device.get('batteryState')
                 firmware = device.get('currentFwVersion')
-                device_type = device.get('deviceType')
+                raw_device_type = device.get('deviceType')
+                device_type = normalize_device_type(raw_device_type) if raw_device_type else None
                 zone_info = entry.get('zone', {})
                 tado_zone_id = zone_info.get('discriminator')
                 

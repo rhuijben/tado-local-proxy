@@ -61,9 +61,15 @@ async def run_server(args):
         else:
             logger.info("✓ Tado Cloud API: Already authenticated")
             logger.info(f"  Home ID: {cloud_api.home_id}")
+            
+            # Verify token is still valid at startup
+            if cloud_api.has_valid_access_token():
+                logger.info("✓ Access token is valid")
+            else:
+                logger.info("Access token expired, will refresh on first API call")
         
-        # Start background token refresh
-        cloud_api.start_background_refresh()
+        # Start background 24-hour sync task (replaces continuous token refresh)
+        cloud_api.start_background_sync()
         
         # Store cloud_api reference in tado_api for use by routes
         tado_api.cloud_api = cloud_api

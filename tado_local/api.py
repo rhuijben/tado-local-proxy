@@ -617,3 +617,73 @@ class TadoLocalAPI:
                 
         except Exception as e:
             logger.error(f"Error handling HomeKit event: {e}")
+    
+    async def set_device_characteristics(self, device_id: int, char_updates: Dict[str, Any]) -> bool:
+        """
+        Set characteristics for a device.
+        
+        Args:
+            device_id: Database device ID
+            char_updates: Dict mapping characteristic UUIDs to values
+                         e.g., {'target_temperature': 21.0, 'target_heating_cooling_state': 1}
+        
+        Returns:
+            True if successful
+            
+        Raises:
+            ValueError if device not found or characteristics not writable
+        """
+        if not self.pairing:
+            raise ValueError("Bridge not connected")
+        
+        # Get device info from in-memory cache
+        device_info = self.state_manager.get_device_info(device_id)
+        if not device_info:
+            raise ValueError(f"Device {device_id} not found")
+        
+        aid = device_info.get('aid')
+        if not aid:
+            # Cache might be stale, try reloading
+            logger.info(f"Device {device_id} has no aid in cache, reloading device cache...")
+            self.state_manager._load_device_cache()
+            device_info = self.state_manager.get_device_info(device_id)
+            aid = device_info.get('aid') if device_info else None
+            
+            if not aid:
+                raise ValueError(f"Device {device_id} has no HomeKit accessory ID (aid)")
+        
+        # Map characteristic names to UUIDs
+        char_uuid_map = {
+            'target_temperature': DeviceStateManager.CHAR_TARGET_TEMPERATURE,
+            'target_heating_cooling_state': DeviceStateManager.CHAR_TARGET_HEATING_COOLING,
+            'target_humidity': DeviceStateManager.CHAR_TARGET_HUMIDITY,
+        }
+        
+        # Find the characteristic IIDs in the accessory
+        characteristics_to_set = []
+        for char_name, value in char_updates.items():
+            char_uuid = char_uuid_map.get(char_name)
+            if not char_uuid:
+                logger.warning(f"Unknown characteristic: {char_name}")
+                continue
+            
+            # Find the IID for this characteristic
+            for acc in self.accessories_cache:
+                if acc.get('aid') == aid:
+                    for service in acc.get('services', []):
+                        for char in service.get('characteristics', []):
+                            if char.get('type').lower() == char_uuid.lower():
+                                iid = char.get('iid')
+                                if iid:
+                                    characteristics_to_set.append((aid, iid, value))
+                                    logger.info(f"Setting {char_name} on device {device_id} (aid={aid}, iid={iid}) to {value}")
+                                break
+        
+        if not characteristics_to_set:
+            raise ValueError("No valid characteristics to set")
+        
+        # Set the characteristics
+        logger.info(f"Sending to HomeKit: {characteristics_to_set}")
+        await self.pairing.put_characteristics(characteristics_to_set)
+        logger.info(f"Successfully set characteristics on device {device_id}")
+        return True

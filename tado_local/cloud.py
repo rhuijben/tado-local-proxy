@@ -14,7 +14,42 @@
 # limitations under the License.
 #
 
-"""Tado Cloud API integration for supplementary data."""
+"""Tado Cloud API integration for supplementary data.
+
+API Call Strategy (optimized for rate limits):
+==============================================
+
+Token Management:
+-----------------
+- Access tokens: Valid for 10 minutes (600s)
+- Refresh tokens: Valid for 30 days, rotate on each use
+- Strategy: Lazy refresh - only when making API calls (via get_headers)
+- Impact: Only refreshes when API is actually used (not continuously)
+
+Data Caching & Sync:
+-------------------
+- 4 JSON endpoints (home, zones, zoneStates, deviceList) cached for 24 hours
+- ETag support: Server returns 304 if data unchanged (minimal rate limit impact)
+- Background sync: Runs every 24 hours to keep room configuration up-to-date
+- Strategy: Fetch once per day automatically, or on-demand with force_refresh=True
+- Impact: ~4-8 data calls per day (1 sync cycle, may get 304 cached responses)
+
+Rate Limit Budget:
+------------------
+- Free tier (post-2024): ~100 calls/day
+- Subscriber tier: ~18,000 calls/day
+- Current usage: ~4-8 calls/day (1 daily sync, token refresh only when needed)
+- Note: Token refresh calls may not count against data call limits
+- Recommendation: Monitor rate_limit headers and adjust sync interval if needed
+
+Benefits:
+---------
+1. Minimal API calls - only when needed or once per day for sync
+2. Lazy token refresh - no continuous background polling
+3. Automatic room configuration updates via 24-hour sync
+4. Relies on HomeKit for real-time data (primary data source)
+5. Well within free tier limits
+"""
 
 import asyncio
 import logging
@@ -210,13 +245,20 @@ class TadoCloudAPI:
         
         Args:
             token_data: Token response from OAuth endpoint
+            
+        Notes:
+            - Access token: Valid for 10 minutes (600s)
+            - Refresh token: Valid for 30 days or until used (with rotation)
         """
         self.access_token = token_data.get('access_token')
-        self.refresh_token = token_data.get('refresh_token')
         
-        # Calculate expiration time (subtract 60s buffer)
-        expires_in = token_data.get('expires_in', 3600)
-        self.token_expires_at = time.time() + expires_in - 60
+        # Only update refresh_token if provided (refresh token rotation)
+        if 'refresh_token' in token_data:
+            self.refresh_token = token_data.get('refresh_token')
+        
+        # Calculate expiration time (subtract 30s buffer for network latency)
+        expires_in = token_data.get('expires_in', 600)
+        self.token_expires_at = time.time() + expires_in - 30
         
         conn = sqlite3.connect(self.db_path)
         conn.execute("""
@@ -234,7 +276,7 @@ class TadoCloudAPI:
         conn.commit()
         conn.close()
         
-        logger.info(f"Saved Tado Cloud API tokens (expires in {expires_in}s)")
+        logger.info(f"Saved Tado Cloud API tokens (access token expires in {expires_in}s)")
     
     async def authenticate(self) -> bool:
         """
@@ -473,25 +515,31 @@ class TadoCloudAPI:
         """
         Ensure we have a valid access token.
         
-        - If no token, start authentication in background
-        - If token expired, try to refresh
-        - If refresh fails, start new authentication
+        Token lifetime strategy:
+        - Access tokens are valid for 10 minutes (use until expiry)
+        - Refresh tokens are valid for 30 days (rotated on each use)
+        - If access token expired, refresh it using refresh token
+        - If refresh fails (token expired after 30 days), re-authenticate
         
         Returns:
             True if we have a valid token, False if authentication is pending
         """
-        # Check if we have a valid token
+        # Check if we have a valid access token
         if self.access_token and self.token_expires_at:
             if time.time() < self.token_expires_at:
                 return True
+            else:
+                logger.debug("Access token expired, will refresh")
         
         # Try to refresh if we have a refresh token
         if self.refresh_token:
-            logger.info("Access token expired, attempting refresh...")
+            logger.info("Refreshing access token...")
             if await self.refresh_access_token():
+                logger.info("✓ Access token refreshed successfully")
                 return True
             else:
-                logger.warning("Token refresh failed, starting new authentication flow...")
+                logger.warning("Token refresh failed - refresh token may have expired after 30 days")
+                logger.info("Starting new authentication flow...")
         
         # Need to authenticate - start in background if not already running
         if not self.is_authenticating:
@@ -501,58 +549,100 @@ class TadoCloudAPI:
         
         return False
     
-    def start_background_refresh(self):
-        """Start background task to refresh token before expiration."""
+    def start_background_sync(self):
+        """Start background task to sync cloud data every 24 hours."""
         if self._refresh_task and not self._refresh_task.done():
-            logger.debug("Background token refresh already running")
+            logger.debug("Background sync already running")
             return
         
-        self._refresh_task = asyncio.create_task(self._background_refresh_loop())
-        logger.info("Started background token refresh task")
+        self._refresh_task = asyncio.create_task(self._background_sync_loop())
+        logger.info("Started background cloud sync task (24-hour interval)")
     
-    async def _background_refresh_loop(self):
-        """Background task to refresh token before expiration."""
+    async def _background_sync_loop(self):
+        """Background task to sync cloud data every 24 hours.
+        
+        Strategy:
+        - Fetches home, zones, zoneStates, and deviceList every 24 hours
+        - Uses cached data if available (ETag 304 responses)
+        - Keeps database up-to-date with room configuration
+        - Token refresh happens on-demand when making API calls
+        """
         while True:
             try:
-                if not self.token_expires_at:
-                    # No token, wait and check again
-                    await asyncio.sleep(300)  # 5 minutes
-                    continue
+                # Wait 1 minute on first start to let authentication complete
+                await asyncio.sleep(60)
                 
-                # Calculate time until refresh needed (refresh 5 minutes before expiry)
-                time_until_refresh = self.token_expires_at - time.time() - 300
-                
-                if time_until_refresh > 0:
-                    logger.debug(f"Token refresh scheduled in {int(time_until_refresh)}s")
-                    await asyncio.sleep(min(time_until_refresh, 3600))  # Max 1 hour sleep
+                # Try to sync if authenticated
+                if self.is_authenticated() or await self.ensure_authenticated():
+                    logger.info("Running 24-hour cloud sync...")
+                    try:
+                        # Fetch all endpoints (uses cache, may get 304 responses)
+                        home_info = await self.get_home_info()
+                        zones = await self.get_zones()
+                        zone_states = await self.get_zone_states()
+                        devices = await self.get_device_list()
+                        
+                        # Log what we got
+                        if home_info:
+                            logger.info(f"✓ Synced home info: {home_info.get('name', 'unknown')}")
+                        if zones:
+                            logger.info(f"✓ Synced {len(zones)} zones")
+                        if devices:
+                            logger.info(f"✓ Synced {len(devices)} devices")
+                        
+                        # Now sync to database
+                        from .sync import TadoCloudSync
+                        sync = TadoCloudSync(self.db_path)
+                        if await sync.sync_all(self):
+                            logger.info("✓ Cloud sync completed successfully")
+                            # Successful sync - sleep for 24 hours
+                            sleep_time = 24 * 3600
+                        else:
+                            logger.error("Cloud sync failed")
+                            # Sync failed - retry in 1 hour
+                            sleep_time = 3600
+                        
+                    except Exception as e:
+                        logger.error(f"Error during cloud sync: {e}")
+                        # Error during sync - retry in 1 hour
+                        sleep_time = 3600
                 else:
-                    # Token about to expire or already expired, refresh now
-                    logger.info("Token about to expire, refreshing...")
-                    if not await self.refresh_access_token():
-                        logger.error("Background token refresh failed")
-                        # Don't re-authenticate automatically in background
-                        # User needs to trigger it manually
-                        await asyncio.sleep(3600)  # Wait 1 hour before trying again
+                    logger.warning("Skipping cloud sync - not authenticated")
+                    # Not authenticated - retry in 5 minutes
+                    sleep_time = 300
+                
+                # Sleep until next sync
+                if sleep_time >= 3600:
+                    hours = sleep_time / 3600
+                    logger.info(f"Next cloud sync in {hours:.0f} hour(s)")
+                else:
+                    minutes = sleep_time / 60
+                    logger.info(f"Next cloud sync in {minutes:.0f} minute(s)")
+                await asyncio.sleep(sleep_time)
             
             except asyncio.CancelledError:
-                logger.info("Background token refresh task cancelled")
+                logger.info("Background cloud sync task cancelled")
                 break
             except Exception as e:
-                logger.error(f"Error in background refresh loop: {e}")
+                logger.error(f"Error in background sync loop: {e}")
                 await asyncio.sleep(3600)  # Wait 1 hour before retrying
     
-    async def stop_background_refresh(self):
-        """Stop the background token refresh task."""
+    async def stop_background_sync(self):
+        """Stop the background sync task."""
         if self._refresh_task and not self._refresh_task.done():
             self._refresh_task.cancel()
             try:
                 await self._refresh_task
             except asyncio.CancelledError:
                 pass
-            logger.info("Stopped background token refresh task")
+            logger.info("Stopped background cloud sync task")
     
     def is_authenticated(self) -> bool:
-        """Check if we have a valid access token."""
+        """Check if we have refresh token (may need access token refresh)."""
+        return self.refresh_token is not None
+    
+    def has_valid_access_token(self) -> bool:
+        """Check if we have a valid access token right now."""
         return (
             self.access_token is not None 
             and self.token_expires_at is not None
@@ -563,7 +653,7 @@ class TadoCloudAPI:
         """
         Get authenticated request headers.
         
-        Ensures token is valid before returning.
+        Ensures token is valid before returning (lazy refresh).
         
         Returns:
             Headers dict with Authorization bearer token

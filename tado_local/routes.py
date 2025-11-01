@@ -71,6 +71,7 @@ def register_routes(app: FastAPI, get_tado_api):
                 "zones": "/zones",
                 "zones_create": "POST /zones",
                 "zones_update": "PUT /zones/{zone_id}",
+                "zones_control": "POST /zones/{zone_id}/control",
                 "thermostats": "/thermostats",
                 "thermostat_by_id": "/thermostats/{id}",
                 "events": "/events",
@@ -330,50 +331,150 @@ def register_routes(app: FastAPI, get_tado_api):
 
     @app.get("/zones", tags=["Zones"])
     async def get_zones():
-        """Get all zones with their devices."""
+        """
+        Get all zones with their devices and real-time state.
+        
+        Returns zone information including:
+        - Current temperature (°C)
+        - Current humidity (%)
+        - Target temperature (°C)
+        - Heating requested (0/1)
+        - Currently heating (0/1)
+        
+        Note: For zones where the leader is a circuit driver (e.g., RU02 controlling
+        multiple rooms), the "currently_heating" status reflects the actual heating
+        state from radiator valves in the zone, not the circuit driver state.
+        """
         tado_api = get_tado_api()
         if not tado_api:
             raise HTTPException(status_code=503, detail="API not initialized")
         
         conn = sqlite3.connect(tado_api.state_manager.db_path)
         
-        # Get all zones
+        # Get all zones with leader info
         cursor = conn.execute("""
             SELECT z.zone_id, z.name, z.leader_device_id, z.order_id,
-                   d.serial_number as leader_serial
+                   d.serial_number as leader_serial, d.device_type as leader_type,
+                   d.is_circuit_driver
             FROM zones z
             LEFT JOIN devices d ON z.leader_device_id = d.device_id
             ORDER BY z.order_id, z.name
         """)
         
         zones = []
-        for zone_id, name, leader_device_id, order_id, leader_serial in cursor.fetchall():
-            # Get devices in this zone
+        for zone_id, name, leader_device_id, order_id, leader_serial, leader_type, is_circuit_driver in cursor.fetchall():
+            # Get all devices in this zone
             device_cursor = conn.execute("""
-                SELECT device_id, serial_number, name, device_type
+                SELECT device_id, serial_number, name, device_type, 
+                       is_zone_leader, is_circuit_driver
                 FROM devices
                 WHERE zone_id = ?
-                ORDER BY device_id
+                ORDER BY is_zone_leader DESC, device_id
             """, (zone_id,))
             
             devices = []
-            for dev_id, serial, dev_name, dev_type in device_cursor.fetchall():
+            zone_state = None
+            heating_devices = []
+            
+            for dev_id, serial, dev_name, dev_type, is_leader, is_circuit in device_cursor.fetchall():
+                # Get current state for this device
+                device_state = tado_api.state_manager.get_current_state(dev_id)
+                
                 devices.append({
                     'device_id': dev_id,
                     'serial_number': serial,
                     'name': dev_name,
                     'device_type': dev_type,
-                    'is_leader': dev_id == leader_device_id
+                    'is_leader': bool(is_leader),
+                    'is_circuit_driver': bool(is_circuit),
+                    'state': {
+                        'current_temperature': device_state.get('current_temperature'),
+                        'humidity': device_state.get('humidity'),
+                        'target_temperature': device_state.get('target_temperature'),
+                        'target_heating_cooling_state': device_state.get('target_heating_cooling_state'),
+                        'current_heating_cooling_state': device_state.get('current_heating_cooling_state'),
+                        'valve_position': device_state.get('valve_position'),
+                    }
                 })
+                
+                # Use leader device state for zone state (or first device if no leader)
+                if (zone_state is None and is_leader) or (zone_state is None and not leader_device_id):
+                    zone_state = device_state
+                
+                # Track which devices are actively heating (for non-circuit-driver heating status)
+                # current_heating_cooling_state: 0=OFF, 1=HEAT, 2=COOL
+                if device_state.get('current_heating_cooling_state') == 1:
+                    heating_devices.append(dev_id)
+            
+            # If no state found yet, use first device
+            if zone_state is None and devices:
+                zone_state = tado_api.state_manager.get_current_state(devices[0]['device_id'])
+            
+            # Build zone summary state
+            if zone_state:
+                current_temp = zone_state.get('current_temperature')
+                humidity = zone_state.get('humidity')
+                target_temp = zone_state.get('target_temperature')
+                target_heating_cooling_state = zone_state.get('target_heating_cooling_state', 0)
+                
+                # Heating requested: Use target_heating_cooling_state
+                # 0=OFF/AUTO, 1=HEAT, 2=COOL, 3=AUTO
+                # For circuit drivers, check actual devices in zone
+                heating_requested = 0
+                if is_circuit_driver:
+                    # Circuit driver - check if any radiator valves are requesting heat
+                    for dev in devices:
+                        if not dev['is_circuit_driver']:
+                            dev_target_state = dev['state'].get('target_heating_cooling_state', 0)
+                            if dev_target_state == 1:  # HEAT
+                                heating_requested = 1
+                                break
+                else:
+                    # Not a circuit driver - use leader/zone state
+                    heating_requested = 1 if target_heating_cooling_state == 1 else 0
+                
+                # Currently heating logic:
+                # - If leader is a circuit driver, check if any NON-circuit-driver devices are heating
+                # - Otherwise, check if the leader/zone device is heating
+                currently_heating = 0
+                if is_circuit_driver:
+                    # Circuit driver - check if any radiator valves in zone are heating
+                    for dev in devices:
+                        if not dev['is_circuit_driver'] and dev['state']['current_heating_cooling_state'] == 1:
+                            currently_heating = 1
+                            break
+                else:
+                    # Not a circuit driver - use leader state
+                    heating_cooling_state = zone_state.get('current_heating_cooling_state', 0)
+                    currently_heating = 1 if heating_cooling_state == 1 else 0
+                
+                state_summary = {
+                    'current_temperature_c': current_temp,
+                    'humidity_percent': humidity,
+                    'target_temperature_c': target_temp,
+                    'heating_requested': heating_requested,
+                    'currently_heating': currently_heating,
+                }
+            else:
+                state_summary = {
+                    'current_temperature_c': None,
+                    'humidity_percent': None,
+                    'target_temperature_c': None,
+                    'heating_requested': 0,
+                    'currently_heating': 0,
+                }
             
             zones.append({
                 'zone_id': zone_id,
                 'name': name,
                 'leader_device_id': leader_device_id,
                 'leader_serial': leader_serial,
+                'leader_type': leader_type,
+                'is_circuit_driver': bool(is_circuit_driver),
                 'order_id': order_id,
                 'devices': devices,
-                'device_count': len(devices)
+                'device_count': len(devices),
+                'state': state_summary
             })
         
         conn.close()
@@ -437,6 +538,93 @@ def register_routes(app: FastAPI, get_tado_api):
         tado_api.state_manager._load_device_cache()
         
         return {'zone_id': zone_id, 'updated': True}
+
+    @app.post("/zones/{zone_id}/control", tags=["Zones"])
+    async def control_zone(
+        zone_id: int, 
+        target_temperature: Optional[float] = None,
+        heating_enabled: Optional[bool] = None
+    ):
+        """
+        Control a zone's heating via its leader device.
+        
+        Args:
+            zone_id: Zone ID to control
+            target_temperature: Target temperature in °C (e.g., 21.0)
+            heating_enabled: Enable/disable heating mode (true/false)
+        
+        Returns:
+            Success status and applied values
+            
+        Notes:
+            - Commands are sent to the zone's leader device
+            - The leader propagates changes to other devices as needed
+            - heating_enabled controls the heat mode (OFF=0, HEAT=1)
+            - target_temperature persists even when heating is disabled
+        """
+        tado_api = get_tado_api()
+        if not tado_api:
+            raise HTTPException(status_code=503, detail="API not initialized")
+        
+        if not tado_api.pairing:
+            raise HTTPException(status_code=503, detail="Bridge not connected")
+        
+        # Get zone info
+        conn = sqlite3.connect(tado_api.state_manager.db_path)
+        cursor = conn.execute("""
+            SELECT z.name, z.leader_device_id, d.serial_number
+            FROM zones z
+            LEFT JOIN devices d ON z.leader_device_id = d.device_id
+            WHERE z.zone_id = ?
+        """, (zone_id,))
+        row = cursor.fetchone()
+        conn.close()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Zone {zone_id} not found")
+        
+        zone_name, leader_device_id, leader_serial = row
+        
+        if not leader_device_id:
+            raise HTTPException(status_code=400, detail=f"Zone '{zone_name}' has no leader device assigned")
+        
+        # Build characteristic updates
+        char_updates = {}
+        
+        if target_temperature is not None:
+            # Validate temperature range (5-30°C is typical for Tado)
+            if target_temperature < 5.0 or target_temperature > 30.0:
+                raise HTTPException(status_code=400, detail="Temperature must be between 5 and 30°C")
+            char_updates['target_temperature'] = target_temperature
+            logger.info(f"Zone {zone_id} ({zone_name}): Setting target_temperature to {target_temperature}°C")
+        
+        if heating_enabled is not None:
+            # 0 = OFF, 1 = HEAT
+            char_updates['target_heating_cooling_state'] = 1 if heating_enabled else 0
+            logger.info(f"Zone {zone_id} ({zone_name}): Setting heating_enabled to {heating_enabled}")
+        
+        if not char_updates:
+            raise HTTPException(status_code=400, detail="No control parameters provided")
+        
+        # Set the characteristics on the leader device
+        try:
+            await tado_api.set_device_characteristics(leader_device_id, char_updates)
+            
+            return {
+                'success': True,
+                'zone_id': zone_id,
+                'zone_name': zone_name,
+                'leader_device_id': leader_device_id,
+                'leader_serial': leader_serial,
+                'applied': {
+                    'target_temperature': target_temperature,
+                    'heating_enabled': heating_enabled
+                }
+            }
+        
+        except Exception as e:
+            logger.error(f"Failed to control zone {zone_id}: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to set zone control: {str(e)}")
 
     @app.put("/devices/{device_id}/zone", tags=["Devices"])
     async def assign_device_to_zone(device_id: int, zone_id: Optional[int] = None):
