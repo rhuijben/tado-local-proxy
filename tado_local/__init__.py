@@ -25,6 +25,8 @@ from .database import DB_SCHEMA, HOMEKIT_SCHEMA
 from .bridge import TadoBridge
 from .state import DeviceStateManager
 from .api import TadoLocalAPI
+from .cloud import TadoCloudAPI, RateLimitInfo
+from .sync import TadoCloudSync
 from . import homekit_uuids
 
 __all__ = [
@@ -34,5 +36,8 @@ __all__ = [
     "TadoBridge",
     "DeviceStateManager",
     "TadoLocalAPI",
+    "TadoCloudAPI",
+    "RateLimitInfo",
+    "TadoCloudSync",
     "homekit_uuids",
 ]

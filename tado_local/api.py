@@ -400,6 +400,7 @@ class TadoLocalAPI:
             device_info = self.state_manager.get_device_info(device_id) if device_id else {}
             zone_name = device_info.get('zone_name', 'No Zone')
             device_name = device_info.get('name') or device_info.get('serial_number', f'Device {device_id}')
+            is_zone_leader = device_info.get('is_zone_leader', False)
             
             # Update device state manager
             if device_id and device_id in self.accessories_dict:
@@ -432,7 +433,13 @@ class TadoLocalAPI:
                 else:
                     self.change_tracker['polling_changes'] += 1
 
-                logger.info(f"[{src}] Z: {zone_name} | D: {device_name} | {char_name}: {last_value} -> {value}")
+                # Format log message: show zone name, only add device detail if not zone leader
+                if is_zone_leader:
+                    # Zone leader - just show zone name
+                    logger.info(f"[{src}] {zone_name} | {char_name}: {last_value} -> {value}")
+                else:
+                    # Non-leader device - show zone + device to distinguish multiple devices
+                    logger.info(f"[{src}] {zone_name} ({device_name}) | {char_name}: {last_value} -> {value}")
 
             # Send to event stream for clients (always, even during init)
             event_data = {

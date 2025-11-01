@@ -94,7 +94,7 @@ def register_routes(app: FastAPI, get_tado_api):
             
             devices = tado_api.state_manager.get_all_devices()
             
-            return {
+            status = {
                 "status": "connected",
                 "bridge_connected": True,
                 "last_update": tado_api.last_update,
@@ -105,6 +105,45 @@ def register_routes(app: FastAPI, get_tado_api):
                 "polling_changes": tado_api.change_tracker.get('polling_changes', 0),
                 "uptime": time.time() - (tado_api.last_update or time.time())
             }
+            
+            # Add cloud API status if available
+            if hasattr(tado_api, 'cloud_api') and tado_api.cloud_api:
+                cloud = tado_api.cloud_api
+                cloud_status = {
+                    "enabled": True,
+                    "authenticated": cloud.is_authenticated(),
+                    "home_id": cloud.home_id,
+                }
+                
+                # Add token expiry info if authenticated
+                if cloud.is_authenticated():
+                    cloud_status["token_expires_at"] = cloud.token_expires_at
+                    cloud_status["token_expires_in"] = int(cloud.token_expires_at - time.time()) if cloud.token_expires_at else None
+                
+                # Add rate limit info if available
+                if cloud.rate_limit and cloud.rate_limit.granted_calls:
+                    cloud_status["rate_limit"] = cloud.rate_limit.to_dict()
+                
+                # Add authentication info if currently authenticating
+                if cloud.is_authenticating and cloud.auth_verification_uri:
+                    cloud_status["authentication_required"] = True
+                    cloud_status["verification_uri"] = cloud.auth_verification_uri
+                    cloud_status["user_code"] = cloud.auth_user_code
+                    cloud_status["auth_expires_at"] = cloud.auth_expires_at
+                    cloud_status["auth_expires_in"] = int(cloud.auth_expires_at - time.time()) if cloud.auth_expires_at else None
+                    cloud_status["message"] = f"Visit {cloud.auth_verification_uri} to authenticate"
+                elif not cloud.is_authenticated():
+                    cloud_status["authentication_required"] = True
+                    cloud_status["message"] = "Authentication will start automatically"
+                
+                status["cloud_api"] = cloud_status
+            else:
+                status["cloud_api"] = {
+                    "enabled": False,
+                    "authenticated": False
+                }
+            
+            return status
         except Exception as e:
             return {
                 "status": "error", 

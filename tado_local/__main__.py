@@ -28,6 +28,7 @@ from aiohomekit.controller.ip.pairing import IpPairing
 
 from .bridge import TadoBridge
 from .api import TadoLocalAPI
+from .cloud import TadoCloudAPI
 from .routes import create_app, register_routes
 
 # Configure logging
@@ -48,6 +49,24 @@ async def run_server(args):
         
         # Initialize the API with database path
         tado_api = TadoLocalAPI(str(db_path))
+        
+        # Initialize Tado Cloud API (always enabled)
+        cloud_api = TadoCloudAPI(str(db_path))
+        
+        # Check if already authenticated
+        if not cloud_api.is_authenticated():
+            logger.info("Tado Cloud API: Starting authentication flow...")
+            # Start authentication in background (non-blocking)
+            asyncio.create_task(cloud_api.authenticate())
+        else:
+            logger.info("✓ Tado Cloud API: Already authenticated")
+            logger.info(f"  Home ID: {cloud_api.home_id}")
+        
+        # Start background token refresh
+        cloud_api.start_background_refresh()
+        
+        # Store cloud_api reference in tado_api for use by routes
+        tado_api.cloud_api = cloud_api
         
         # Create the FastAPI app
         app = create_app()
@@ -89,6 +108,12 @@ async def run_server(args):
         # Clean up resources
         if tado_api:
             logger.info("Performing cleanup...")
+            
+            # Stop cloud API background refresh if running
+            if hasattr(tado_api, 'cloud_api') and tado_api.cloud_api:
+                logger.info("Stopping Tado Cloud API background tasks...")
+                await tado_api.cloud_api.stop_background_refresh()
+            
             await tado_api.cleanup()
 
 def main():
@@ -130,6 +155,7 @@ API Endpoints:
                        help="Port for REST API server (default: 4407)")
     parser.add_argument("--clear-pairings", action="store_true",
                        help="Clear all existing pairings from database before starting")
+    
     args = parser.parse_args()
 
     # Run with proper error handling
