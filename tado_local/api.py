@@ -19,6 +19,7 @@
 import asyncio
 import json
 import logging
+import sqlite3
 import time
 from collections import defaultdict
 from typing import Dict, List, Any, Optional
@@ -442,19 +443,12 @@ class TadoLocalAPI:
                     logger.info(f"[{src}] {zone_name} ({device_name}) | {char_name}: {last_value} -> {value}")
 
             # Send to event stream for clients (always, even during init)
-            event_data = {
-                'source': source,
-                'timestamp': timestamp,
-                'aid': aid,
-                'iid': iid,
-                'characteristic': char_name,
-                'value': value,
-                'previous_value': last_value,
-                'id': device_id if device_id in self.accessories_dict else None,
-                'zone_name': zone_name,
-                'device_name': device_name
-            }
-            await self.broadcast_event(event_data)
+            # Don't send raw characteristic events anymore - we'll send aggregated state changes
+            
+            # Broadcast aggregated state change for relevant characteristics
+            if char_name in ['TargetTemperature', 'CurrentTemperature', 'TargetHeatingCoolingState', 
+                            'CurrentHeatingCoolingState', 'CurrentRelativeHumidity', 'ValvePosition']:
+                await self.broadcast_state_change(device_id, zone_name)
             
         except Exception as e:
             logger.error(f"Error handling unified change: {e}")
@@ -480,6 +474,129 @@ class TadoLocalAPI:
                     
         except Exception as e:
             logger.error(f"Error broadcasting event: {e}")
+    
+    def _celsius_to_fahrenheit(self, celsius: float) -> float:
+        """Convert Celsius to Fahrenheit."""
+        if celsius is None:
+            return None
+        return round(celsius * 9/5 + 32, 1)
+    
+    def _build_device_state(self, device_id: int) -> dict:
+        """Build a standardized device state dictionary."""
+        state = self.state_manager.get_current_state(device_id)
+        device_info = self.state_manager.device_info_cache.get(device_id, {})
+        
+        cur_temp_c = state.get('current_temperature')
+        target_temp_c = state.get('target_temperature')
+        
+        # Determine battery_low from Cloud API battery_state (cached, no extra DB query)
+        battery_state = device_info.get('battery_state')
+        battery_low = battery_state is not None and battery_state != 'NORMAL'
+        
+        return {
+            'cur_temp_c': cur_temp_c,
+            'cur_temp_f': self._celsius_to_fahrenheit(cur_temp_c) if cur_temp_c is not None else None,
+            'hum_perc': state.get('humidity'),
+            'target_temp_c': target_temp_c,
+            'target_temp_f': self._celsius_to_fahrenheit(target_temp_c) if target_temp_c is not None else None,
+            'mode': state.get('target_heating_cooling_state', 0),  # 0=Off, 1=Heat, 2=Cool, 3=Auto
+            'cur_heating': 1 if state.get('current_heating_cooling_state') == 1 else 0,
+            'valve_position': state.get('valve_position'),
+            'battery_low': battery_low,
+        }
+    
+    async def broadcast_state_change(self, device_id: int, zone_name: str):
+        """
+        Broadcast device and zone state change events.
+        
+        Sends standardized state updates for both the device and its zone (if assigned).
+        """
+        try:
+            # Get device info
+            device_info = self.state_manager.get_device_info(device_id)
+            if not device_info:
+                return
+            
+            serial = device_info.get('serial_number')
+            is_zone_leader = device_info.get('is_zone_leader', False)
+            is_circuit_driver = device_info.get('is_circuit_driver', False)
+            
+            # Build device state
+            device_state = self._build_device_state(device_id)
+            
+            # Broadcast device state change
+            device_event = {
+                'type': 'device',
+                'device_id': device_id,
+                'serial': serial,
+                'zone_name': zone_name,
+                'state': device_state,
+                'timestamp': time.time()
+            }
+            await self.broadcast_event(device_event)
+            
+            # Also broadcast zone state if device is assigned to a zone
+            conn = sqlite3.connect(self.state_manager.db_path)
+            cursor = conn.execute("""
+                SELECT z.zone_id, z.name, z.leader_device_id, d.is_circuit_driver
+                FROM devices d
+                JOIN zones z ON d.zone_id = z.zone_id
+                LEFT JOIN devices leader ON z.leader_device_id = leader.device_id
+                WHERE d.device_id = ?
+            """, (device_id,))
+            row = cursor.fetchone()
+            
+            if row:
+                zone_id, zone_name, leader_device_id, leader_is_circuit = row
+                
+                # Get leader state for zone
+                if leader_device_id:
+                    leader_state = self._build_device_state(leader_device_id)
+                    
+                    # Build zone state using zone logic
+                    zone_state = {
+                        'cur_temp_c': leader_state['cur_temp_c'],
+                        'cur_temp_f': leader_state['cur_temp_f'],
+                        'hum_perc': leader_state['hum_perc'],
+                        'target_temp_c': leader_state['target_temp_c'],
+                        'target_temp_f': leader_state['target_temp_f'],
+                        'mode': 0,
+                        'cur_heating': 0
+                    }
+                    
+                    # Apply circuit driver logic for heating states
+                    if leader_is_circuit:
+                        # Circuit driver - check radiator valves in zone
+                        valve_cursor = conn.execute("""
+                            SELECT device_id FROM devices 
+                            WHERE zone_id = ? AND is_circuit_driver = 0
+                        """, (zone_id,))
+                        
+                        for (valve_id,) in valve_cursor.fetchall():
+                            valve_state = self._build_device_state(valve_id)
+                            if valve_state['mode'] == 1:
+                                zone_state['mode'] = 1
+                            if valve_state['cur_heating'] == 1:
+                                zone_state['cur_heating'] = 1
+                    else:
+                        # Regular device - use leader state
+                        zone_state['mode'] = leader_state['mode']
+                        zone_state['cur_heating'] = leader_state['cur_heating']
+                    
+                    # Broadcast zone state change
+                    zone_event = {
+                        'type': 'zone',
+                        'zone_id': zone_id,
+                        'zone_name': zone_name,
+                        'state': zone_state,
+                        'timestamp': time.time()
+                    }
+                    await self.broadcast_event(zone_event)
+            
+            conn.close()
+            
+        except Exception as e:
+            logger.debug(f"Error broadcasting state change: {e}")
     
     async def setup_polling_system(self):
         """Setup polling system for comparison with events."""

@@ -115,10 +115,10 @@ async def run_server(args):
         if tado_api:
             logger.info("Performing cleanup...")
             
-            # Stop cloud API background refresh if running
+            # Stop cloud API background sync if running
             if hasattr(tado_api, 'cloud_api') and tado_api.cloud_api:
                 logger.info("Stopping Tado Cloud API background tasks...")
-                await tado_api.cloud_api.stop_background_refresh()
+                await tado_api.cloud_api.stop_background_sync()
             
             await tado_api.cleanup()
 

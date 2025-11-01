@@ -207,7 +207,11 @@ def register_routes(app: FastAPI, get_tado_api):
 
     @app.get("/thermostats", tags=["Tado"])
     async def get_thermostats():
-        """Get all thermostat devices with current and target temperatures - uses live state."""
+        """
+        Get all thermostat devices with standardized state.
+        
+        Returns temperature, humidity, mode, and heating status for each thermostat.
+        """
         tado_api = get_tado_api()
         if not tado_api:
             raise HTTPException(status_code=503, detail="API not initialized")
@@ -218,53 +222,45 @@ def register_routes(app: FastAPI, get_tado_api):
         thermostats = []
         accessories = tado_api.accessories_cache
         
-        # Get current live state from state manager
-        current_states = tado_api.state_manager.get_current_state()
-        
         for accessory in accessories:
             services = accessory.get('services', [])
             for service in services:
-                if service.get('type') == '0000004A-0000-1000-8000-0026BB765291':
+                if service.get('type') == '0000004A-0000-1000-8000-0026BB765291':  # Thermostat service
                     
                     device_id = accessory.get('id')
-                    live_state = current_states.get(device_id, {}) if device_id else {}
+                    if not device_id:
+                        continue
+                    
+                    # Get device info from cache
+                    device_info = tado_api.state_manager.device_info_cache.get(device_id, {})
+                    
+                    # Build standardized state
+                    state = tado_api.state_manager.get_current_state(device_id)
+                    cur_temp_c = state.get('current_temperature')
+                    target_temp_c = state.get('target_temperature')
+                    
+                    # Determine battery_low from Cloud API (cached)
+                    battery_state = device_info.get('battery_state')
+                    battery_low = battery_state is not None and battery_state != 'NORMAL'
                     
                     thermostat = {
-                        'id': device_id,
+                        'device_id': device_id,
                         'aid': accessory.get('aid'),
                         'serial_number': accessory.get('serial_number'),
-                        # Use live state if available, otherwise fall back to cached
-                        'current_temperature': live_state.get('current_temperature'),
-                        'target_temperature': live_state.get('target_temperature'),
-                        'heating_state': live_state.get('current_heating_cooling_state'),
-                        'target_heating_state': live_state.get('target_heating_cooling_state'),
-                        'humidity': live_state.get('humidity'),
-                        'valve_position': live_state.get('valve_position'),
-                        'active_state': live_state.get('active_state'),
-                        'last_update': live_state.get('last_update'),
-                        'data_source': 'live' if live_state else 'cache'
+                        'zone_name': device_info.get('zone_name'),
+                        'device_type': device_info.get('device_type'),
+                        'state': {
+                            'cur_temp_c': cur_temp_c,
+                            'cur_temp_f': round(cur_temp_c * 9/5 + 32, 1) if cur_temp_c is not None else None,
+                            'hum_perc': state.get('humidity'),
+                            'target_temp_c': target_temp_c,
+                            'target_temp_f': round(target_temp_c * 9/5 + 32, 1) if target_temp_c is not None else None,
+                            'mode': state.get('target_heating_cooling_state', 0),
+                            'cur_heating': 1 if state.get('current_heating_cooling_state') == 1 else 0,
+                            'valve_position': state.get('valve_position'),
+                            'battery_low': battery_low,
+                        }
                     }
-                    
-                    # Extract name from characteristics if not in live state
-                    for char in service.get('characteristics', []):
-                        char_type = char.get('type')
-                        char_value = char.get('value')
-                        
-                        if char_type == '00000023-0000-1000-8000-0026BB765291':
-                            thermostat['name'] = char_value
-                        
-                        # Only use cached values if no live state available
-                        if not live_state:
-                            if char_type == '00000011-0000-1000-8000-0026BB765291':
-                                thermostat['current_temperature'] = char_value
-                            elif char_type == '00000035-0000-1000-8000-0026BB765291':
-                                thermostat['target_temperature'] = char_value
-                            elif char_type == '0000000F-0000-1000-8000-0026BB765291':
-                                thermostat['heating_state'] = char_value
-                            elif char_type == '00000033-0000-1000-8000-0026BB765291':
-                                thermostat['target_heating_state'] = char_value
-                            elif char_type == '00000010-0000-1000-8000-0026BB765291':
-                                thermostat['humidity'] = char_value
                     
                     thermostats.append(thermostat)
         
@@ -272,7 +268,7 @@ def register_routes(app: FastAPI, get_tado_api):
 
     @app.get("/thermostats/{id}", tags=["Tado"])
     async def get_thermostat(id: int):
-        """Get specific thermostat by ID (database device_id) with live state."""
+        """Get specific thermostat by device ID with standardized state."""
         tado_api = get_tado_api()
         if not tado_api:
             raise HTTPException(status_code=503, detail="API not initialized")
@@ -300,115 +296,93 @@ def register_routes(app: FastAPI, get_tado_api):
         if not is_thermostat:
             raise HTTPException(status_code=400, detail=f"Device {id} is not a thermostat")
         
-        # Get live state
-        live_state = tado_api.state_manager.get_current_state(id) if id else {}
+        # Get device info from cache
+        device_info = tado_api.state_manager.device_info_cache.get(id, {})
+        
+        # Build standardized state
+        state = tado_api.state_manager.get_current_state(id)
+        cur_temp_c = state.get('current_temperature')
+        target_temp_c = state.get('target_temperature')
+        
+        # Determine battery_low from Cloud API (cached)
+        battery_state = device_info.get('battery_state')
+        battery_low = battery_state is not None and battery_state != 'NORMAL'
         
         thermostat = {
-            'id': id,
+            'device_id': id,
             'aid': accessory.get('aid'),
             'serial_number': accessory.get('serial_number'),
-            'current_temperature': live_state.get('current_temperature'),
-            'target_temperature': live_state.get('target_temperature'),
-            'heating_state': live_state.get('current_heating_cooling_state'),
-            'target_heating_state': live_state.get('target_heating_cooling_state'),
-            'humidity': live_state.get('humidity'),
-            'valve_position': live_state.get('valve_position'),
-            'active_state': live_state.get('active_state'),
-            'battery_level': live_state.get('battery_level'),
-            'status_low_battery': live_state.get('status_low_battery'),
-            'last_update': live_state.get('last_update'),
-            'data_source': 'live' if live_state else 'cache'
+            'zone_name': device_info.get('zone_name'),
+            'device_type': device_info.get('device_type'),
+            'is_zone_leader': device_info.get('is_zone_leader'),
+            'is_circuit_driver': device_info.get('is_circuit_driver'),
+            'state': {
+                'cur_temp_c': cur_temp_c,
+                'cur_temp_f': round(cur_temp_c * 9/5 + 32, 1) if cur_temp_c is not None else None,
+                'hum_perc': state.get('humidity'),
+                'target_temp_c': target_temp_c,
+                'target_temp_f': round(target_temp_c * 9/5 + 32, 1) if target_temp_c is not None else None,
+                'mode': state.get('target_heating_cooling_state', 0),
+                'cur_heating': 1 if state.get('current_heating_cooling_state') == 1 else 0,
+                'valve_position': state.get('valve_position'),
+                'battery_low': battery_low,
+            }
         }
-        
-        # Get name from characteristics
-        for service in accessory.get('services', []):
-            for char in service.get('characteristics', []):
-                if char.get('type') == '00000023-0000-1000-8000-0026BB765291':
-                    thermostat['name'] = char.get('value')
-                    break
         
         return thermostat
 
     @app.get("/zones", tags=["Zones"])
     async def get_zones():
         """
-        Get all zones with their devices and real-time state.
+        Get all zones with aggregated state (no per-device details).
         
-        Returns zone information including:
-        - Current temperature (°C)
+        Returns zone-level information:
+        - Current temperature (°C and °F)
         - Current humidity (%)
-        - Target temperature (°C)
-        - Heating requested (0/1)
-        - Currently heating (0/1)
+        - Target temperature (°C and °F)
+        - Mode (0=Off, 1=Heat) - TargetHeatingCoolingState
+        - Currently heating (0=Off, 1=Heating, 2=Cooling) - CurrentHeatingCoolingState
+        
+        Note: Mode values depend on device capabilities. Heating-only devices typically
+        support 0 (Off) and 1 (Heat). Devices with cooling may support additional values.
+        
+        For individual device details, use /thermostats or /devices endpoints.
         
         Note: For zones where the leader is a circuit driver (e.g., RU02 controlling
-        multiple rooms), the "currently_heating" status reflects the actual heating
+        multiple rooms), the "cur_heating" status reflects the actual heating
         state from radiator valves in the zone, not the circuit driver state.
         """
         tado_api = get_tado_api()
         if not tado_api:
             raise HTTPException(status_code=503, detail="API not initialized")
         
-        conn = sqlite3.connect(tado_api.state_manager.db_path)
-        
-        # Get all zones with leader info
-        cursor = conn.execute("""
-            SELECT z.zone_id, z.name, z.leader_device_id, z.order_id,
-                   d.serial_number as leader_serial, d.device_type as leader_type,
-                   d.is_circuit_driver
-            FROM zones z
-            LEFT JOIN devices d ON z.leader_device_id = d.device_id
-            ORDER BY z.order_id, z.name
-        """)
-        
         zones = []
-        for zone_id, name, leader_device_id, order_id, leader_serial, leader_type, is_circuit_driver in cursor.fetchall():
-            # Get all devices in this zone
-            device_cursor = conn.execute("""
-                SELECT device_id, serial_number, name, device_type, 
-                       is_zone_leader, is_circuit_driver
-                FROM devices
-                WHERE zone_id = ?
-                ORDER BY is_zone_leader DESC, device_id
-            """, (zone_id,))
+        
+        # Use cached zone info (no DB query)
+        for zone_id, zone_info in sorted(tado_api.state_manager.zone_cache.items(), 
+                                          key=lambda x: (x[1].get('order_id') or 999, x[1].get('name'))):
+            name = zone_info['name']
+            leader_device_id = zone_info['leader_device_id']
+            order_id = zone_info['order_id']
+            leader_serial = zone_info['leader_serial']
+            leader_type = zone_info['leader_type']
+            is_circuit_driver = zone_info['is_circuit_driver']
             
-            devices = []
+            # Get device count for this zone (quick loop through device cache)
+            device_count = sum(1 for dev_info in tado_api.state_manager.device_info_cache.values() 
+                              if dev_info.get('zone_id') == zone_id)
+            
+            # Get zone state from leader or first device
             zone_state = None
-            heating_devices = []
+            if leader_device_id:
+                zone_state = tado_api.state_manager.get_current_state(leader_device_id)
             
-            for dev_id, serial, dev_name, dev_type, is_leader, is_circuit in device_cursor.fetchall():
-                # Get current state for this device
-                device_state = tado_api.state_manager.get_current_state(dev_id)
-                
-                devices.append({
-                    'device_id': dev_id,
-                    'serial_number': serial,
-                    'name': dev_name,
-                    'device_type': dev_type,
-                    'is_leader': bool(is_leader),
-                    'is_circuit_driver': bool(is_circuit),
-                    'state': {
-                        'current_temperature': device_state.get('current_temperature'),
-                        'humidity': device_state.get('humidity'),
-                        'target_temperature': device_state.get('target_temperature'),
-                        'target_heating_cooling_state': device_state.get('target_heating_cooling_state'),
-                        'current_heating_cooling_state': device_state.get('current_heating_cooling_state'),
-                        'valve_position': device_state.get('valve_position'),
-                    }
-                })
-                
-                # Use leader device state for zone state (or first device if no leader)
-                if (zone_state is None and is_leader) or (zone_state is None and not leader_device_id):
-                    zone_state = device_state
-                
-                # Track which devices are actively heating (for non-circuit-driver heating status)
-                # current_heating_cooling_state: 0=OFF, 1=HEAT, 2=COOL
-                if device_state.get('current_heating_cooling_state') == 1:
-                    heating_devices.append(dev_id)
-            
-            # If no state found yet, use first device
-            if zone_state is None and devices:
-                zone_state = tado_api.state_manager.get_current_state(devices[0]['device_id'])
+            # If no leader state, try first device in zone
+            if not zone_state:
+                for dev_id, dev_info in tado_api.state_manager.device_info_cache.items():
+                    if dev_info.get('zone_id') == zone_id:
+                        zone_state = tado_api.state_manager.get_current_state(dev_id)
+                        break
             
             # Build zone summary state
             if zone_state:
@@ -417,51 +391,71 @@ def register_routes(app: FastAPI, get_tado_api):
                 target_temp = zone_state.get('target_temperature')
                 target_heating_cooling_state = zone_state.get('target_heating_cooling_state', 0)
                 
-                # Heating requested: Use target_heating_cooling_state
-                # 0=OFF/AUTO, 1=HEAT, 2=COOL, 3=AUTO
+                # Mode: Use target_heating_cooling_state
                 # For circuit drivers, check actual devices in zone
-                heating_requested = 0
+                mode = 0
                 if is_circuit_driver:
-                    # Circuit driver - check if any radiator valves are requesting heat
-                    for dev in devices:
-                        if not dev['is_circuit_driver']:
-                            dev_target_state = dev['state'].get('target_heating_cooling_state', 0)
-                            if dev_target_state == 1:  # HEAT
-                                heating_requested = 1
+                    # Circuit driver - check if any radiator valves are requesting heat (use cache)
+                    other_devices = [dev_id for dev_id, dev_info in tado_api.state_manager.device_info_cache.items()
+                                    if dev_info.get('zone_id') == zone_id and not dev_info.get('is_circuit_driver')]
+                    
+                    if other_devices:
+                        # Circuit driver with other devices - check radiator valves
+                        for dev_id in other_devices:
+                            dev_state = tado_api.state_manager.get_current_state(dev_id)
+                            if dev_state and dev_state.get('target_heating_cooling_state') == 1:
+                                mode = 1
                                 break
+                    else:
+                        # Circuit driver alone in zone - use its own state
+                        mode = target_heating_cooling_state
                 else:
-                    # Not a circuit driver - use leader/zone state
-                    heating_requested = 1 if target_heating_cooling_state == 1 else 0
+                    # Not a circuit driver - use zone state
+                    mode = target_heating_cooling_state
                 
-                # Currently heating logic:
-                # - If leader is a circuit driver, check if any NON-circuit-driver devices are heating
-                # - Otherwise, check if the leader/zone device is heating
-                currently_heating = 0
+                # Currently heating logic
+                cur_heating = 0
                 if is_circuit_driver:
-                    # Circuit driver - check if any radiator valves in zone are heating
-                    for dev in devices:
-                        if not dev['is_circuit_driver'] and dev['state']['current_heating_cooling_state'] == 1:
-                            currently_heating = 1
-                            break
+                    # Circuit driver - check if any radiator valves in zone are heating (use cache)
+                    other_devices = [dev_id for dev_id, dev_info in tado_api.state_manager.device_info_cache.items()
+                                    if dev_info.get('zone_id') == zone_id and not dev_info.get('is_circuit_driver')]
+                    
+                    if other_devices:
+                        # Circuit driver with other devices - check radiator valves
+                        for dev_id in other_devices:
+                            dev_state = tado_api.state_manager.get_current_state(dev_id)
+                            if dev_state and dev_state.get('current_heating_cooling_state') == 1:
+                                cur_heating = 1
+                                break
+                    else:
+                        # Circuit driver alone in zone - use its own state
+                        cur_heating = 1 if zone_state.get('current_heating_cooling_state') == 1 else 0
                 else:
-                    # Not a circuit driver - use leader state
-                    heating_cooling_state = zone_state.get('current_heating_cooling_state', 0)
-                    currently_heating = 1 if heating_cooling_state == 1 else 0
+                    # Not a circuit driver - use zone state
+                    cur_heating = 1 if zone_state.get('current_heating_cooling_state') == 1 else 0
+                
+                # Convert temperatures to Fahrenheit
+                cur_temp_f = round(current_temp * 9/5 + 32, 1) if current_temp is not None else None
+                target_temp_f = round(target_temp * 9/5 + 32, 1) if target_temp is not None else None
                 
                 state_summary = {
-                    'current_temperature_c': current_temp,
-                    'humidity_percent': humidity,
-                    'target_temperature_c': target_temp,
-                    'heating_requested': heating_requested,
-                    'currently_heating': currently_heating,
+                    'cur_temp_c': current_temp,
+                    'cur_temp_f': cur_temp_f,
+                    'hum_perc': humidity,
+                    'target_temp_c': target_temp,
+                    'target_temp_f': target_temp_f,
+                    'mode': mode,
+                    'cur_heating': cur_heating,
                 }
             else:
                 state_summary = {
-                    'current_temperature_c': None,
-                    'humidity_percent': None,
-                    'target_temperature_c': None,
-                    'heating_requested': 0,
-                    'currently_heating': 0,
+                    'cur_temp_c': None,
+                    'cur_temp_f': None,
+                    'hum_perc': None,
+                    'target_temp_c': None,
+                    'target_temp_f': None,
+                    'mode': 0,
+                    'cur_heating': 0,
                 }
             
             zones.append({
@@ -472,12 +466,9 @@ def register_routes(app: FastAPI, get_tado_api):
                 'leader_type': leader_type,
                 'is_circuit_driver': bool(is_circuit_driver),
                 'order_id': order_id,
-                'devices': devices,
-                'device_count': len(devices),
+                'device_count': device_count,
                 'state': state_summary
             })
-        
-        conn.close()
         
         return {
             'zones': zones,
@@ -645,18 +636,56 @@ def register_routes(app: FastAPI, get_tado_api):
 
     @app.get("/devices", tags=["Devices"])
     async def get_devices():
-        """Get all registered devices with current state."""
+        """
+        Get all registered devices with standardized state.
+        
+        Returns all devices (thermostats, valves, bridges, etc.) with:
+        - Device metadata (serial, type, zone)
+        - Standardized state format
+        - Battery status (for battery-powered devices)
+        """
         tado_api = get_tado_api()
         if not tado_api:
             raise HTTPException(status_code=503, detail="API not initialized")
         
-        devices = tado_api.state_manager.get_all_devices()
-        current_states = tado_api.state_manager.get_current_state()
+        all_devices = tado_api.state_manager.get_all_devices()
         
-        # Enrich devices with current state
-        for device in devices:
-            device_id = device['device_id']
-            device['current_state'] = current_states.get(device_id, {})
+        devices = []
+        for device_info in all_devices:
+            device_id = device_info['device_id']
+            state = tado_api.state_manager.get_current_state(device_id)
+            
+            # Build standardized state
+            cur_temp_c = state.get('current_temperature')
+            target_temp_c = state.get('target_temperature')
+            
+            # Determine battery_low from Cloud API (cached in device_info, no extra DB query)
+            battery_state = device_info.get('battery_state')
+            battery_low = battery_state is not None and battery_state != 'NORMAL'
+            
+            device = {
+                'device_id': device_id,
+                'serial_number': device_info.get('serial_number'),
+                'aid': device_info.get('aid'),
+                'zone_id': device_info.get('zone_id'),
+                'zone_name': device_info.get('zone_name'),
+                'device_type': device_info.get('device_type'),
+                'is_zone_leader': device_info.get('is_zone_leader'),
+                'is_circuit_driver': device_info.get('is_circuit_driver'),
+                'state': {
+                    'cur_temp_c': cur_temp_c,
+                    'cur_temp_f': round(cur_temp_c * 9/5 + 32, 1) if cur_temp_c is not None else None,
+                    'hum_perc': state.get('humidity'),
+                    'target_temp_c': target_temp_c,
+                    'target_temp_f': round(target_temp_c * 9/5 + 32, 1) if target_temp_c is not None else None,
+                    'mode': state.get('target_heating_cooling_state', 0),
+                    'cur_heating': 1 if state.get('current_heating_cooling_state') == 1 else 0,
+                    'valve_position': state.get('valve_position'),
+                    'battery_low': battery_low,
+                }
+            }
+            
+            devices.append(device)
         
         return {
             "devices": devices,
@@ -666,7 +695,7 @@ def register_routes(app: FastAPI, get_tado_api):
     @app.get("/devices/{id}", tags=["Devices"])
     async def get_device(id: int):
         """
-        Get specific device with current state by ID (database device_id).
+        Get specific device with standardized state by ID (database device_id).
         
         Args:
             id: Device ID (database ID)
@@ -675,13 +704,44 @@ def register_routes(app: FastAPI, get_tado_api):
         if not tado_api:
             raise HTTPException(status_code=503, detail="API not initialized")
         
-        devices = tado_api.state_manager.get_all_devices()
-        device = next((d for d in devices if d['device_id'] == id), None)
+        all_devices = tado_api.state_manager.get_all_devices()
+        device_info = next((d for d in all_devices if d['device_id'] == id), None)
         
-        if not device:
+        if not device_info:
             raise HTTPException(status_code=404, detail=f"Device {id} not found")
         
-        device['current_state'] = tado_api.state_manager.get_current_state(id)
+        state = tado_api.state_manager.get_current_state(id)
+        
+        # Build standardized state
+        cur_temp_c = state.get('current_temperature')
+        target_temp_c = state.get('target_temperature')
+        
+        # Determine battery_low from Cloud API (cached)
+        battery_state = device_info.get('battery_state')
+        battery_low = battery_state is not None and battery_state != 'NORMAL'
+        
+        device = {
+            'device_id': id,
+            'serial_number': device_info.get('serial_number'),
+            'aid': device_info.get('aid'),
+            'zone_id': device_info.get('zone_id'),
+            'zone_name': device_info.get('zone_name'),
+            'device_type': device_info.get('device_type'),
+            'is_zone_leader': device_info.get('is_zone_leader'),
+            'is_circuit_driver': device_info.get('is_circuit_driver'),
+            'state': {
+                'cur_temp_c': cur_temp_c,
+                'cur_temp_f': round(cur_temp_c * 9/5 + 32, 1) if cur_temp_c is not None else None,
+                'hum_perc': state.get('humidity'),
+                'target_temp_c': target_temp_c,
+                'target_temp_f': round(target_temp_c * 9/5 + 32, 1) if target_temp_c is not None else None,
+                'mode': state.get('target_heating_cooling_state', 0),
+                'cur_heating': 1 if state.get('current_heating_cooling_state') == 1 else 0,
+                'valve_position': state.get('valve_position'),
+                'battery_low': battery_low,
+            }
+        }
+        
         return device
 
     @app.get("/devices/{id}/history", tags=["Devices"])
@@ -763,7 +823,76 @@ def register_routes(app: FastAPI, get_tado_api):
 
     @app.get("/events", tags=["Events"])
     async def get_events():
-        """Server-Sent Events endpoint for real-time updates."""
+        """
+        Server-Sent Events (SSE) endpoint for real-time updates.
+        
+        Clients can maintain a persistent connection to receive live updates without polling.
+        
+        Event Types:
+        
+        1. Device State Change:
+           {
+               "type": "device",
+               "device_id": 4,
+               "serial": "RU1372921856",
+               "zone_name": "Studeerkamer",
+               "state": {
+                   "cur_temp_c": 21.5,
+                   "cur_temp_f": 70.7,
+                   "hum_perc": 55,
+                   "target_temp_c": 21.0,
+                   "target_temp_f": 69.8,
+                   "mode": 1,
+                   "cur_heating": 1,
+                   "valve_position": 45,
+                   "battery_low": false
+               },
+               "timestamp": 1730477890.123
+           }
+        
+        2. Zone State Change:
+           {
+               "type": "zone",
+               "zone_id": 4,
+               "zone_name": "Studeerkamer",
+               "state": {
+                   "cur_temp_c": 21.5,
+                   "cur_temp_f": 70.7,
+                   "hum_perc": 55,
+                   "target_temp_c": 21.0,
+                   "target_temp_f": 69.8,
+                   "mode": 1,
+                   "cur_heating": 1
+               },
+               "timestamp": 1730477890.123
+           }
+        
+        3. Keepalive (every 30 seconds):
+           {
+               "type": "keepalive",
+               "timestamp": 1730477890.123
+           }
+        
+        State Field Reference:
+            mode: 0=Off, 1=Heat, 2=Cool, 3=Auto (TargetHeatingCoolingState)
+            cur_heating: 0=not heating, 1=actively heating (CurrentHeatingCoolingState)
+            battery_low: true if Cloud API battery_state != "NORMAL" (cached, no DB queries)
+            Temperatures provided in both Celsius (_c) and Fahrenheit (_f)
+        
+        Usage Example:
+            const eventSource = new EventSource('/events');
+            eventSource.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                
+                if (data.type === 'zone') {
+                    // Update zone UI
+                    updateZone(data.zone_id, data.state);
+                } else if (data.type === 'device') {
+                    // Update device UI (if showing device details)
+                    updateDevice(data.device_id, data.state);
+                }
+            };
+        """
         tado_api = get_tado_api()
         
         async def event_publisher():

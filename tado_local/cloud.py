@@ -594,7 +594,6 @@ class TadoCloudAPI:
                         from .sync import TadoCloudSync
                         sync = TadoCloudSync(self.db_path)
                         if await sync.sync_all(self):
-                            logger.info("✓ Cloud sync completed successfully")
                             # Successful sync - sleep for 24 hours
                             sleep_time = 24 * 3600
                         else:

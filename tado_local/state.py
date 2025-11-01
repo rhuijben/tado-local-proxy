@@ -59,11 +59,13 @@ class DeviceStateManager:
         self.device_id_cache: Dict[str, int] = {}  # serial_number -> device_id
         self.aid_to_device_id: Dict[int, int] = {}  # aid -> device_id (bidirectional mapping)
         self.device_info_cache: Dict[int, Dict[str, Any]] = {}  # device_id -> {name, zone_name, serial, aid, etc}
+        self.zone_cache: Dict[int, Dict[str, Any]] = {}  # zone_id -> {name, leader_device_id, etc}
         self.current_state: Dict[int, Dict[str, Any]] = {}  # device_id -> current state
         self.last_saved_bucket: Dict[int, str] = {}  # device_id -> last saved bucket
         self.bucket_state_snapshot: Dict[int, Dict[str, Any]] = {}  # device_id -> state when bucket was saved
         self._ensure_schema()
         self._load_device_cache()
+        self._load_zone_cache()
         self._load_latest_state_from_db()
     
     def _ensure_schema(self):
@@ -133,11 +135,12 @@ class DeviceStateManager:
         """Load device ID mappings and info from database."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.execute("""
-            SELECT d.device_id, d.serial_number, d.aid, d.name, d.device_type, z.name as zone_name, d.is_zone_leader
+            SELECT d.device_id, d.serial_number, d.aid, d.name, d.device_type, 
+                   d.zone_id, z.name as zone_name, d.is_zone_leader, d.is_circuit_driver, d.battery_state
             FROM devices d
             LEFT JOIN zones z ON d.zone_id = z.zone_id
         """)
-        for device_id, serial_number, aid, name, device_type, zone_name, is_zone_leader in cursor.fetchall():
+        for device_id, serial_number, aid, name, device_type, zone_id, zone_name, is_zone_leader, is_circuit_driver, battery_state in cursor.fetchall():
             self.device_id_cache[serial_number] = device_id
             if aid:
                 self.aid_to_device_id[aid] = device_id
@@ -146,11 +149,40 @@ class DeviceStateManager:
                 'aid': aid,
                 'name': name,
                 'device_type': device_type,
+                'zone_id': zone_id,
                 'zone_name': zone_name,
-                'is_zone_leader': bool(is_zone_leader)
+                'is_zone_leader': bool(is_zone_leader),
+                'is_circuit_driver': bool(is_circuit_driver),
+                'battery_state': battery_state  # From Cloud API: "NORMAL", "LOW", etc.
             }
         conn.close()
         logger.info(f"Loaded {len(self.device_id_cache)} devices from cache")
+    
+    def _load_zone_cache(self):
+        """Load zone information into memory cache."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.execute("""
+            SELECT z.zone_id, z.name, z.leader_device_id, z.order_id,
+                   d.serial_number as leader_serial, d.device_type as leader_type,
+                   d.is_circuit_driver
+            FROM zones z
+            LEFT JOIN devices d ON z.leader_device_id = d.device_id
+            ORDER BY z.order_id, z.name
+        """)
+        
+        for zone_id, name, leader_device_id, order_id, leader_serial, leader_type, is_circuit_driver in cursor.fetchall():
+            self.zone_cache[zone_id] = {
+                'zone_id': zone_id,
+                'name': name,
+                'leader_device_id': leader_device_id,
+                'order_id': order_id,
+                'leader_serial': leader_serial,
+                'leader_type': leader_type,
+                'is_circuit_driver': bool(is_circuit_driver)
+            }
+        
+        conn.close()
+        logger.info(f"Loaded {len(self.zone_cache)} zones from cache")
     
     def _load_latest_state_from_db(self):
         """Load the most recent state for each device from the database to avoid duplicate saves on startup."""
