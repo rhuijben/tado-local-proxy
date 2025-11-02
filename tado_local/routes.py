@@ -21,10 +21,12 @@ import json
 import logging
 import sqlite3
 import time
+from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from .homekit_uuids import enhance_accessory_data, get_service_name, get_characteristic_name
 from .state import DeviceStateManager
@@ -41,6 +43,11 @@ def create_app():
         version="1.0.0"
     )
     
+    # Mount static files
+    static_dir = Path(__file__).parent / "static"
+    if static_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    
     return app
 
 
@@ -52,36 +59,99 @@ def register_routes(app: FastAPI, get_tado_api):
         get_tado_api: Callable that returns the current TadoLocalAPI instance
     """
     
-    @app.get("/", tags=["Info"])
+    @app.get("/", tags=["Web UI"])
     async def root():
-        """API root with basic information."""
+        """Serve the web UI."""
+        static_dir = Path(__file__).parent / "static"
+        index_file = static_dir / "index.html"
+        
+        if index_file.exists():
+            return FileResponse(index_file, media_type="text/html")
+        else:
+            # Fallback to API info if web UI not found
+            return {
+                "service": "Tado Local API",
+                "description": "Local REST API for Tado devices via HomeKit bridge",
+                "version": "1.0.0",
+                "documentation": "/docs",
+                "api_info": "/api",
+                "note": "Web UI not found. Install static/index.html or visit /api for API details"
+            }
+    
+    @app.get("/api", tags=["Info"])
+    async def api_info():
+        """API root with diagnostics and navigation."""
         return {
             "service": "Tado Local API",
             "description": "Local REST API for Tado devices via HomeKit bridge",
             "version": "1.0.0",
             "documentation": "/docs",
+            "web_ui": "/",
             "endpoints": {
                 "status": "/status",
                 "devices": "/devices",
-                "device_by_id": "/devices/{id}",
-                "device_history": "/devices/{id}/history",
-                "device_assign_zone": "/devices/{id}/zone",
-                "current_state": "/devices/current-state",
-                "accessories": "/accessories", 
                 "zones": "/zones",
-                "zones_create": "POST /zones",
-                "zones_update": "PUT /zones/{zone_id}",
-                "zones_control": "POST /zones/{zone_id}/control",
                 "thermostats": "/thermostats",
-                "thermostat_by_id": "/thermostats/{id}",
                 "events": "/events",
-                "events_zones": "/events/zones",
+                "accessories": "/accessories",
                 "refresh": "/refresh",
-                "debug_characteristics": "/debug/characteristics",
-                "debug_humidity": "/debug/humidity"
-            },
-            "note": "All endpoints use 'id' (database device_id) as primary key. Thermostat endpoints return LIVE data."
+                "refresh_cloud": "/refresh/cloud",
+                "debug": "/debug/characteristics"
+            }
         }
+    
+    # Web UI routes (under /ui prefix)
+    @app.get("/ui", tags=["Web UI"])
+    async def web_ui():
+        """Serve the web UI."""
+        static_dir = Path(__file__).parent / "static"
+        index_file = static_dir / "index.html"
+        
+        if index_file.exists():
+            return FileResponse(index_file, media_type="text/html")
+        else:
+            raise HTTPException(status_code=404, detail="Web UI not found. Install static/index.html")
+    
+    @app.get("/ui/status", tags=["Web UI"])
+    async def get_ui_status():
+        """Get overall system status (Web UI route)."""
+        return await get_status()
+    
+    @app.get("/ui/zones", tags=["Web UI"])
+    async def get_ui_zones():
+        """Get all zones (Web UI route)."""
+        return await get_zones()
+    
+    @app.post("/ui/zones/{zone_id}/control", tags=["Web UI"])
+    async def control_ui_zone(
+        zone_id: int,
+        target_temperature: Optional[float] = None,
+        heating_enabled: Optional[bool] = None
+    ):
+        """Control a zone (Web UI route)."""
+        return await control_zone(zone_id, target_temperature, heating_enabled)
+    
+    @app.get("/ui/cloud/home", tags=["Web UI"])
+    async def get_ui_cloud_home():
+        """Get home info from cloud API (Web UI route)."""
+        tado_api = get_tado_api()
+        
+        if not hasattr(tado_api, 'cloud_api') or not tado_api.cloud_api:
+            raise HTTPException(status_code=503, detail="Cloud API not available")
+        
+        cloud_api = tado_api.cloud_api
+        
+        if not cloud_api.is_authenticated():
+            raise HTTPException(status_code=401, detail="Not authenticated with Tado Cloud API")
+        
+        try:
+            home_info = await cloud_api.get_home_info()
+            if not home_info:
+                raise HTTPException(status_code=404, detail="Home info not found")
+            return home_info
+        except Exception as e:
+            logger.error(f"Error fetching home info: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to fetch home info: {str(e)}")
 
     @app.get("/status", tags=["Status"])
     async def get_status():
@@ -360,8 +430,9 @@ def register_routes(app: FastAPI, get_tado_api):
         zones = []
         
         # Use cached zone info (no DB query)
+        # Sort by order_id (treating None as 999, but 0 is valid), then by name
         for zone_id, zone_info in sorted(tado_api.state_manager.zone_cache.items(), 
-                                          key=lambda x: (x[1].get('order_id') or 999, x[1].get('name'))):
+                                          key=lambda x: (999 if x[1].get('order_id') is None else x[1].get('order_id'), x[1].get('name'))):
             name = zone_info['name']
             leader_device_id = zone_info['leader_device_id']
             order_id = zone_info['order_id']
@@ -471,7 +542,26 @@ def register_routes(app: FastAPI, get_tado_api):
                 'state': state_summary
             })
         
+        # Get home info if cloud API is available and authenticated
+        homes = []
+        if hasattr(tado_api, 'cloud_api') and tado_api.cloud_api and tado_api.cloud_api.is_authenticated():
+            try:
+                home_data = await tado_api.cloud_api.get_home_info()
+                if home_data:
+                    homes.append({
+                        'id': home_data.get('id'),
+                        'name': home_data.get('name')
+                    })
+            except Exception as e:
+                logger.debug(f"Could not fetch home info: {e}")
+        
+        # Add home_id reference to each zone (from first/only home for now)
+        home_id = homes[0]['id'] if homes else None
+        for zone in zones:
+            zone['home_id'] = home_id
+        
         return {
+            'homes': homes,
             'zones': zones,
             'count': len(zones)
         }
@@ -950,20 +1040,21 @@ def register_routes(app: FastAPI, get_tado_api):
                             for zone_id, zone_name in zones:
                                 zone_state = tado_api.state_manager.get_zone_state(zone_id)
                                 if zone_state:
-                                    refresh_event = f"data: {json.dumps({
+                                    event_obj = {
                                         'type': 'zone',
                                         'zone_id': zone_id,
                                         'zone_name': zone_name,
                                         'state': zone_state,
                                         'timestamp': time.time(),
-                                        'refresh': True  # Mark as refresh update
-                                    })}\n\n"
-                                    yield refresh_event
+                                        'refresh': True
+                                    }
+                                    yield f"data: {json.dumps(event_obj)}\n\n"
                             
                             last_refresh = time.time()
                         else:
                             # Send keepalive
-                            yield f"data: {json.dumps({'type': 'keepalive', 'timestamp': time.time()})}\n\n"
+                            keepalive_obj = {'type': 'keepalive', 'timestamp': time.time()}
+                            yield f"data: {json.dumps(keepalive_obj)}\n\n"
                         
             except asyncio.CancelledError:
                 logger.debug("SSE stream cancelled")
@@ -1087,20 +1178,21 @@ def register_routes(app: FastAPI, get_tado_api):
                             for zone_id, zone_name in zones:
                                 zone_state = tado_api.state_manager.get_zone_state(zone_id)
                                 if zone_state:
-                                    refresh_event = f"data: {json.dumps({
+                                    event_obj = {
                                         'type': 'zone',
                                         'zone_id': zone_id,
                                         'zone_name': zone_name,
                                         'state': zone_state,
                                         'timestamp': time.time(),
-                                        'refresh': True  # Mark as refresh update
-                                    })}\n\n"
-                                    yield refresh_event
+                                        'refresh': True
+                                    }
+                                    yield f"data: {json.dumps(event_obj)}\n\n"
                             
                             last_refresh = time.time()
                         else:
                             # Send keepalive
-                            yield f"data: {json.dumps({'type': 'keepalive', 'timestamp': time.time()})}\n\n"
+                            keepalive_obj = {'type': 'keepalive', 'timestamp': time.time()}
+                            yield f"data: {json.dumps(keepalive_obj)}\n\n"
                         
             except asyncio.CancelledError:
                 logger.debug("Zone SSE stream cancelled")
@@ -1122,9 +1214,95 @@ def register_routes(app: FastAPI, get_tado_api):
 
     @app.post("/refresh", tags=["Admin"])
     async def refresh_data():
-        """Manually refresh accessories data from HomeKit."""
+        """Manually refresh accessories data from HomeKit bridge."""
         tado_api = get_tado_api()
         return await tado_api.refresh_accessories()
+    
+    @app.post("/refresh/cloud", tags=["Admin"])
+    async def refresh_cloud_data(battery_only: bool = False):
+        """
+        Manually refresh data from Tado Cloud API.
+        
+        Args:
+            battery_only: If true, only refresh battery/status data (fast).
+                         If false, refresh all data including config (slower).
+        
+        Returns:
+            Summary of refreshed data
+            
+        This bypasses the cache and fetches fresh data from Tado's servers.
+        Useful when you need immediate battery status updates or after making
+        changes in the Tado app.
+        """
+        tado_api = get_tado_api()
+        
+        if not hasattr(tado_api, 'cloud_api') or not tado_api.cloud_api:
+            raise HTTPException(status_code=503, detail="Cloud API not available")
+        
+        cloud_api = tado_api.cloud_api
+        
+        if not cloud_api.is_authenticated():
+            raise HTTPException(status_code=401, detail="Not authenticated with Tado Cloud API")
+        
+        try:
+            # Import sync module
+            from .sync import TadoCloudSync
+            sync = TadoCloudSync(tado_api.state_manager.db_path)
+            
+            result = {}
+            
+            if battery_only:
+                # Fast refresh: battery and status data only
+                logger.info("Refreshing battery/status data from cloud...")
+                zone_states = await cloud_api.get_zone_states(force_refresh=True)
+                devices = await cloud_api.get_device_list(force_refresh=True)
+                
+                if devices:
+                    result['devices_synced'] = len(devices)
+                    logger.info(f"✓ Synced {len(devices)} devices (battery status)")
+                
+                # Sync to database
+                await sync.sync_all(cloud_api, 
+                                  home_data=False,  # Skip
+                                  zones_data=False,  # Skip
+                                  zone_states_data=zone_states,
+                                  devices_data=devices)
+                
+                result['refreshed'] = ['battery_status', 'device_status']
+            else:
+                # Full refresh: all data
+                logger.info("Refreshing all cloud data...")
+                home_info = await cloud_api.get_home_info(force_refresh=True)
+                zones = await cloud_api.get_zones(force_refresh=True)
+                zone_states = await cloud_api.get_zone_states(force_refresh=True)
+                devices = await cloud_api.get_device_list(force_refresh=True)
+                
+                if home_info:
+                    result['home_name'] = home_info.get('name')
+                if zones:
+                    result['zones_synced'] = len(zones)
+                if devices:
+                    result['devices_synced'] = len(devices)
+                
+                # Sync to database
+                await sync.sync_all(cloud_api,
+                                  home_data=home_info,
+                                  zones_data=zones,
+                                  zone_states_data=zone_states,
+                                  devices_data=devices)
+                
+                result['refreshed'] = ['home_info', 'zones', 'battery_status', 'device_status']
+            
+            # Reload device cache to pick up changes
+            tado_api.state_manager._load_device_cache()
+            
+            result['success'] = True
+            result['timestamp'] = time.time()
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error refreshing cloud data: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to refresh cloud data: {str(e)}")
 
     @app.get("/debug/characteristics", tags=["Debug"])
     async def debug_characteristics():

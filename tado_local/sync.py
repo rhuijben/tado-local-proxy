@@ -288,15 +288,27 @@ class TadoCloudSync:
             logger.error(f"Failed to sync device list: {e}", exc_info=True)
             return False
     
-    async def sync_all(self, cloud_api) -> bool:
+    async def sync_all(self, cloud_api, 
+                       home_data=None, 
+                       zones_data=None, 
+                       zone_states_data=None,
+                       devices_data=None) -> bool:
         """
         Sync all data from Tado Cloud API to database.
         
         Args:
             cloud_api: TadoCloudAPI instance
+            home_data: Pre-fetched home info (optional, will fetch if None)
+            zones_data: Pre-fetched zones data (optional, will fetch if None)
+            zone_states_data: Pre-fetched zone states (optional, currently unused)
+            devices_data: Pre-fetched device list (optional, will fetch if None)
             
         Returns:
             True if all syncs successful
+            
+        Note: Passing None for any parameter means that data type won't be synced
+              in this call. This enables differential sync (e.g., battery data
+              every 4h, static config every 24h).
         """
         if not cloud_api.is_authenticated():
             logger.warning("Cannot sync: not authenticated with Tado Cloud API")
@@ -308,40 +320,80 @@ class TadoCloudSync:
             return False
         
         success = True
+        synced_any = False
         
-        # 1. Sync home info
-        logger.info("Syncing home information...")
-        home_data = await cloud_api.get_home_info()
-        if home_data:
+        # 1. Sync home info (if provided or needs fetching)
+        if home_data is not None:
+            logger.info("Syncing home information...")
             if not self.sync_home(home_data):
                 success = False
+            else:
+                synced_any = True
+        elif home_data is False:  # Explicitly disabled
+            pass
         else:
-            logger.error("Failed to fetch home info")
-            success = False
+            # Fetch if not provided
+            logger.info("Fetching and syncing home information...")
+            home_data = await cloud_api.get_home_info()
+            if home_data:
+                if not self.sync_home(home_data):
+                    success = False
+                else:
+                    synced_any = True
+            else:
+                logger.error("Failed to fetch home info")
+                success = False
         
-        # 2. Sync zones (includes device-to-zone mappings)
-        logger.info("Syncing zones and devices...")
-        zones_data = await cloud_api.get_zones()
-        if zones_data:
+        # 2. Sync zones (if provided or needs fetching)
+        if zones_data is not None:
+            logger.info("Syncing zones and devices...")
             if not self.sync_zones(zones_data, home_id):
                 success = False
+            else:
+                synced_any = True
+        elif zones_data is False:  # Explicitly disabled
+            pass
         else:
-            logger.error("Failed to fetch zones")
-            success = False
-        
-        # 3. Sync device list (updates battery states)
-        logger.info("Syncing device list (battery states)...")
-        device_list = await cloud_api.get_device_list()
-        if device_list:
-            if not self.sync_device_list(device_list, home_id):
+            # Fetch if not provided
+            logger.info("Fetching and syncing zones...")
+            zones_data = await cloud_api.get_zones()
+            if zones_data:
+                if not self.sync_zones(zones_data, home_id):
+                    success = False
+                else:
+                    synced_any = True
+            else:
+                logger.error("Failed to fetch zones")
                 success = False
-        else:
-            logger.error("Failed to fetch device list")
-            success = False
         
-        if success:
-            logger.info("✓ Cloud sync completed successfully")
+        # 3. Sync device list (if provided or needs fetching)
+        if devices_data is not None:
+            logger.info("Syncing device list (battery states)...")
+            if not self.sync_device_list(devices_data, home_id):
+                success = False
+            else:
+                synced_any = True
+        elif devices_data is False:  # Explicitly disabled
+            pass
         else:
-            logger.warning("Cloud sync completed with errors")
+            # Fetch if not provided
+            logger.info("Fetching and syncing device list...")
+            device_list = await cloud_api.get_device_list()
+            if device_list:
+                if not self.sync_device_list(device_list, home_id):
+                    success = False
+                else:
+                    synced_any = True
+            else:
+                logger.error("Failed to fetch device list")
+                success = False
+        
+        if synced_any:
+            if success:
+                logger.info("✓ Cloud sync completed successfully")
+            else:
+                logger.warning("Cloud sync completed with errors")
+        else:
+            logger.debug("Cloud sync: no data to sync in this call")
         
         return success

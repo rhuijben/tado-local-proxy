@@ -28,9 +28,14 @@ Token Management:
 
 Data Caching & Sync:
 -------------------
-- 4 JSON endpoints (home, zones, zoneStates, deviceList) cached for 24 hours
+- 4 JSON endpoints: 
+  - zoneStates, deviceList: cached for 4 hours (battery/status data)
+  - home, zones: cached for 24 hours (static configuration)
 - ETag support: Server returns 304 if data unchanged (minimal rate limit impact)
-- Background sync: Runs every 24 hours to keep room configuration up-to-date
+- Background sync: Differential caching strategy
+  - Dynamic data (battery, status): every 4 hours (~6 calls/day)
+  - Static data (config, zones): every 24 hours (~1 call/day)
+  - Total: ~7 API calls per day (well under 100/day limit)
 - Strategy: Fetch once per day automatically, or on-demand with force_refresh=True
 - Impact: ~4-8 data calls per day (1 sync cycle, may get 304 cached responses)
 
@@ -46,7 +51,10 @@ Benefits:
 ---------
 1. Minimal API calls - only when needed or once per day for sync
 2. Lazy token refresh - no continuous background polling
-3. Automatic room configuration updates via 24-hour sync
+3. Automatic updates via differential caching
+   - Battery status and device online/offline: Updated every 4 hours
+   - Zone names and home configuration: Updated every 24 hours
+   - Minimizes API calls while keeping critical data fresh
 4. Relies on HomeKit for real-time data (primary data source)
 5. Well within free tier limits
 """
@@ -550,61 +558,108 @@ class TadoCloudAPI:
         return False
     
     def start_background_sync(self):
-        """Start background task to sync cloud data every 24 hours."""
+        """Start background task with differential caching (4h battery, 24h config)."""
         if self._refresh_task and not self._refresh_task.done():
             logger.debug("Background sync already running")
             return
         
         self._refresh_task = asyncio.create_task(self._background_sync_loop())
-        logger.info("Started background cloud sync task (24-hour interval)")
+        logger.info("Started background cloud sync (4h battery, 24h config)")
     
     async def _background_sync_loop(self):
-        """Background task to sync cloud data every 24 hours.
+        """Background task to sync cloud data with differential caching strategy.
         
         Strategy:
-        - Fetches home, zones, zoneStates, and deviceList every 24 hours
-        - Uses cached data if available (ETag 304 responses)
-        - Keeps database up-to-date with room configuration
-        - Token refresh happens on-demand when making API calls
+        - Dynamic data (battery status, online/offline): Every 4 hours (6 calls/day)
+          - zoneStates (includes battery status)
+          - deviceList (includes connection status)
+        - Static data (zone names, home config): Every 24 hours (1 call/day)
+          - home info
+          - zones (room configuration)
+        
+        Total: ~7 API calls per day (well under 100/day limit)
+        Token refresh happens on-demand when making API calls.
         """
+        # Track separate timers for dynamic vs static data
+        last_dynamic_sync = 0
+        last_static_sync = 0
+        dynamic_interval = 4 * 3600  # 4 hours
+        static_interval = 24 * 3600  # 24 hours
+        
         while True:
             try:
                 # Wait 1 minute on first start to let authentication complete
-                await asyncio.sleep(60)
+                if last_dynamic_sync == 0:
+                    await asyncio.sleep(60)
+                
+                current_time = time.time()
                 
                 # Try to sync if authenticated
                 if self.is_authenticated() or await self.ensure_authenticated():
-                    logger.info("Running 24-hour cloud sync...")
-                    try:
-                        # Fetch all endpoints (uses cache, may get 304 responses)
-                        home_info = await self.get_home_info()
-                        zones = await self.get_zones()
-                        zone_states = await self.get_zone_states()
-                        devices = await self.get_device_list()
+                    # Determine what needs syncing
+                    sync_dynamic = (current_time - last_dynamic_sync) >= dynamic_interval
+                    sync_static = (current_time - last_static_sync) >= static_interval
+                    
+                    if sync_dynamic or sync_static:
+                        sync_type = []
+                        if sync_dynamic:
+                            sync_type.append("dynamic (battery/status)")
+                        if sync_static:
+                            sync_type.append("static (config)")
                         
-                        # Log what we got
-                        if home_info:
-                            logger.info(f"✓ Synced home info: {home_info.get('name', 'unknown')}")
-                        if zones:
-                            logger.info(f"✓ Synced {len(zones)} zones")
-                        if devices:
-                            logger.info(f"✓ Synced {len(devices)} devices")
+                        logger.info(f"Running cloud sync: {', '.join(sync_type)}...")
                         
-                        # Now sync to database
-                        from .sync import TadoCloudSync
-                        sync = TadoCloudSync(self.db_path)
-                        if await sync.sync_all(self):
-                            # Successful sync - sleep for 24 hours
-                            sleep_time = 24 * 3600
-                        else:
-                            logger.error("Cloud sync failed")
-                            # Sync failed - retry in 1 hour
+                        try:
+                            # Always fetch dynamic data when it's time
+                            zone_states = None
+                            devices = None
+                            if sync_dynamic:
+                                zone_states = await self.get_zone_states()
+                                devices = await self.get_device_list()
+                                if devices:
+                                    logger.info(f"✓ Synced {len(devices)} devices (battery status)")
+                                last_dynamic_sync = current_time
+                            
+                            # Only fetch static data every 24 hours
+                            home_info = None
+                            zones = None
+                            if sync_static:
+                                home_info = await self.get_home_info()
+                                zones = await self.get_zones()
+                                if home_info:
+                                    logger.info(f"✓ Synced home info: {home_info.get('name', 'unknown')}")
+                                if zones:
+                                    logger.info(f"✓ Synced {len(zones)} zones (configuration)")
+                                last_static_sync = current_time
+                            
+                            # Sync to database
+                            from .sync import TadoCloudSync
+                            sync = TadoCloudSync(self.db_path)
+                            
+                            # Pass what we fetched (None values will be skipped in sync)
+                            if await sync.sync_all(self, 
+                                                   home_data=home_info, 
+                                                   zones_data=zones,
+                                                   zone_states_data=zone_states,
+                                                   devices_data=devices):
+                                # Calculate next sync time (use shorter of the two intervals)
+                                next_dynamic_in = dynamic_interval - (time.time() - last_dynamic_sync)
+                                next_static_in = static_interval - (time.time() - last_static_sync)
+                                sleep_time = max(60, min(next_dynamic_in, next_static_in))
+                            else:
+                                logger.error("Cloud sync failed")
+                                # Sync failed - retry in 1 hour
+                                sleep_time = 3600
+                        
+                        except Exception as e:
+                            logger.error(f"Error during cloud sync: {e}")
+                            # Error during sync - retry in 1 hour
                             sleep_time = 3600
-                        
-                    except Exception as e:
-                        logger.error(f"Error during cloud sync: {e}")
-                        # Error during sync - retry in 1 hour
-                        sleep_time = 3600
+                    else:
+                        # Calculate next sync time
+                        next_dynamic_in = dynamic_interval - (current_time - last_dynamic_sync)
+                        next_static_in = static_interval - (current_time - last_static_sync)
+                        sleep_time = max(60, min(next_dynamic_in, next_static_in))
                 else:
                     logger.warning("Skipping cloud sync - not authenticated")
                     # Not authenticated - retry in 5 minutes
@@ -613,7 +668,7 @@ class TadoCloudAPI:
                 # Sleep until next sync
                 if sleep_time >= 3600:
                     hours = sleep_time / 3600
-                    logger.info(f"Next cloud sync in {hours:.0f} hour(s)")
+                    logger.info(f"Next cloud sync in {hours:.1f} hour(s)")
                 else:
                     minutes = sleep_time / 60
                     logger.info(f"Next cloud sync in {minutes:.0f} minute(s)")
@@ -730,7 +785,7 @@ class TadoCloudAPI:
         }
     
     def _set_cache(self, endpoint: str, response_data: Any, etag: Optional[str], 
-                   cache_lifetime_hours: float = 24.0):
+                   cache_lifetime_hours: float = 4.0):
         """
         Store response in cache.
         
@@ -738,7 +793,7 @@ class TadoCloudAPI:
             endpoint: API endpoint path
             response_data: Response data to cache (will be JSON serialized)
             etag: ETag header from response (for conditional requests)
-            cache_lifetime_hours: How long to cache (default: 24 hours)
+            cache_lifetime_hours: How long to cache (default: 4 hours)
         """
         if not self.home_id:
             logger.warning("Cannot cache: no home_id set")
@@ -886,8 +941,10 @@ class TadoCloudAPI:
             
         Returns:
             Home info dict or None on error
+            
+        Note: Cached for 24 hours (static configuration data)
         """
-        return await self._fetch_with_cache('', force_refresh=force_refresh)
+        return await self._fetch_with_cache('', cache_lifetime_hours=24.0, force_refresh=force_refresh)
     
     async def get_zones(self, force_refresh: bool = False) -> Optional[list]:
         """
@@ -898,8 +955,10 @@ class TadoCloudAPI:
             
         Returns:
             List of zone dicts or None on error
+            
+        Note: Cached for 24 hours (static configuration data)
         """
-        return await self._fetch_with_cache('zones', force_refresh=force_refresh)
+        return await self._fetch_with_cache('zones', cache_lifetime_hours=24.0, force_refresh=force_refresh)
     
     async def get_zone_states(self, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
         """
@@ -910,8 +969,10 @@ class TadoCloudAPI:
             
         Returns:
             Zone states dict or None on error
+            
+        Note: Cached for 4 hours (includes battery status, changes frequently)
         """
-        return await self._fetch_with_cache('zoneStates', force_refresh=force_refresh)
+        return await self._fetch_with_cache('zoneStates', cache_lifetime_hours=4.0, force_refresh=force_refresh)
     
     async def get_device_list(self, force_refresh: bool = False) -> Optional[list]:
         """
@@ -924,8 +985,10 @@ class TadoCloudAPI:
             
         Returns:
             List of device dicts or None on error
+            
+        Note: Cached for 4 hours (includes battery status, changes frequently)
         """
-        return await self._fetch_with_cache('deviceList', force_refresh=force_refresh)
+        return await self._fetch_with_cache('deviceList', cache_lifetime_hours=4.0, force_refresh=force_refresh)
     
     async def refresh_all_cache(self):
         """Refresh all cached endpoints from Tado Cloud API."""

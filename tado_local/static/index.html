@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tado Local</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+            font-weight: 400;
+        }
+
+        .zones-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .zone-card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            position: relative;
+            min-height: 160px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .zone-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+
+        .zone-card.heating-cold {
+            background: linear-gradient(135deg, #4caf50 0%, #45a049 100%);
+            color: white;
+        }
+
+        .zone-card.heating-medium {
+            background: linear-gradient(135deg, #ffab5e 0%, #ff9642 100%);
+            color: white;
+        }
+
+        .zone-card.heating-hot {
+            background: linear-gradient(135deg, #f44336 0%, #e53935 100%);
+            color: white;
+        }
+
+        .zone-card.off {
+            background: #e0e0e0;
+            color: #666;
+        }
+
+        .zone-temp {
+            font-size: 48px;
+            font-weight: 300;
+            line-height: 1;
+            margin-bottom: 5px;
+        }
+
+        .zone-temp-decimal {
+            font-size: 32px;
+            font-weight: 300;
+        }
+
+        .zone-temp-unit {
+            font-size: 24px;
+            vertical-align: super;
+        }
+
+        .zone-name {
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 5px;
+        }
+
+        .zone-status {
+            font-size: 12px;
+            opacity: 0.9;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .zone-humidity {
+            font-size: 11px;
+            opacity: 0.8;
+            margin-top: 3px;
+        }
+
+        .zone-comfort {
+            font-size: 11px;
+            opacity: 0.9;
+            margin-top: 3px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .zone-status::before {
+            content: '▼';
+            font-size: 10px;
+        }
+
+        .flame-icon {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            font-size: 24px;
+            animation: flicker 1.5s infinite alternate;
+        }
+
+        @keyframes flicker {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.8; }
+        }
+
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            max-width: 400px;
+            width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            margin-bottom: 20px;
+        }
+
+        .modal-title {
+            font-size: 24px;
+            font-weight: 400;
+            margin-bottom: 10px;
+        }
+
+        .modal-temp {
+            font-size: 48px;
+            font-weight: 300;
+            color: #ff7b2e;
+        }
+
+        .control-group {
+            margin-bottom: 25px;
+        }
+
+        .control-label {
+            font-size: 14px;
+            font-weight: 500;
+            color: #666;
+            margin-bottom: 10px;
+            display: block;
+        }
+
+        .temp-control {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            margin: 20px 0;
+        }
+
+        .temp-button {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            border: 2px solid #ff7b2e;
+            background: white;
+            color: #ff7b2e;
+            font-size: 24px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .temp-button:hover {
+            background: #ff7b2e;
+            color: white;
+        }
+
+        .temp-display {
+            font-size: 42px;
+            font-weight: 300;
+            min-width: 100px;
+            text-align: center;
+        }
+
+        .mode-buttons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .mode-button {
+            padding: 15px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            background: white;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+
+        .mode-button:hover {
+            border-color: #ff7b2e;
+        }
+
+        .mode-button.active {
+            border-color: #ff7b2e;
+            background: #fff3e0;
+            color: #ff7b2e;
+            font-weight: 500;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 25px;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 15px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: #ff7b2e;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #ff6b1e;
+        }
+
+        .btn-secondary {
+            background: #e0e0e0;
+            color: #666;
+        }
+
+        .btn-secondary:hover {
+            background: #d0d0d0;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+
+        .error {
+            background: #ffebee;
+            color: #c62828;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .battery-low {
+            color: #ff5252;
+            font-size: 12px;
+            margin-top: 5px;
+        }
+
+        .status-bar {
+            background: white;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .status-item {
+            font-size: 14px;
+            color: #666;
+        }
+
+        .status-value {
+            font-weight: 500;
+            color: #333;
+        }
+
+        .footer {
+            text-align: center;
+            padding: 30px 20px;
+            margin-top: 40px;
+            border-top: 1px solid #e0e0e0;
+        }
+
+        .footer a {
+            color: #999;
+            text-decoration: none;
+            font-size: 13px;
+            margin: 0 15px;
+            transition: color 0.2s;
+        }
+
+        .footer a:hover {
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 id="home-name">Tado Local</h1>
+        
+        <div class="status-bar" id="status-bar" style="display: none;">
+            <div class="status-item">
+                <span class="status-value" id="zone-count">-</span> zones
+            </div>
+            <div class="status-item">
+                Cloud: <span class="status-value" id="cloud-status">-</span>
+            </div>
+            <div class="status-item">
+                Last update: <span class="status-value" id="last-update">-</span>
+            </div>
+        </div>
+
+        <div id="error-message" class="error" style="display: none;"></div>
+        
+        <div class="zones-grid" id="zones-grid">
+            <div class="loading">Loading zones...</div>
+        </div>
+
+        <div class="footer">
+            <a href="/api">API Details</a>
+            <a href="/docs">API Docs</a>
+        </div>
+    </div>
+
+    <!-- Modal -->
+    <div class="modal" id="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title" id="modal-zone-name">Zone</h2>
+                <div class="modal-temp" id="modal-current-temp">--°</div>
+                <div id="modal-battery-warning" class="battery-low" style="display: none;">⚠️ Low battery</div>
+            </div>
+
+            <div class="control-group">
+                <label class="control-label">Target Temperature</label>
+                <div class="temp-control">
+                    <button class="temp-button" id="temp-down">−</button>
+                    <div class="temp-display" id="temp-display">20°</div>
+                    <button class="temp-button" id="temp-up">+</button>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label class="control-label">Mode</label>
+                <div class="mode-buttons">
+                    <button class="mode-button" id="mode-heat" data-mode="heat">Heat</button>
+                    <button class="mode-button" id="mode-off" data-mode="off">Off</button>
+                </div>
+            </div>
+
+            <div class="action-buttons">
+                <button class="btn btn-secondary" id="btn-cancel">Cancel</button>
+                <button class="btn btn-primary" id="btn-apply">Apply</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let zones = [];
+        let currentZone = null;
+        let tempValue = 20;
+        let modeValue = 'heat';
+        let eventSource = null;
+
+        // Load zones
+        async function loadZones() {
+            try {
+                const response = await fetch('/zones');
+                if (!response.ok) throw new Error('Failed to load zones');
+                
+                const data = await response.json();
+                zones = data.zones;
+                
+                // Update home name and page title if available (use first home)
+                if (data.homes && data.homes.length > 0 && data.homes[0].name) {
+                    document.getElementById('home-name').textContent = data.homes[0].name;
+                    document.title = `${data.homes[0].name} - Tado Local`;
+                }
+                
+                renderZones();
+                updateStatus(data);
+            } catch (error) {
+                showError('Failed to load zones: ' + error.message);
+            }
+        }
+
+        // Load status
+        async function loadStatus() {
+            try {
+                const response = await fetch('/status');
+                if (!response.ok) return;
+                
+                const data = await response.json();
+                
+                // Update cloud status
+                const cloudStatusEl = document.getElementById('cloud-status');
+                if (data.cloud_api) {
+                    if (data.cloud_api.authenticated) {
+                        cloudStatusEl.textContent = 'Connected';
+                        cloudStatusEl.style.color = '#4caf50';
+                    } else if (data.cloud_api.authentication_required) {
+                        if (data.cloud_api.verification_uri) {
+                            cloudStatusEl.innerHTML = `<a href="${data.cloud_api.verification_uri}" target="_blank" style="color: #ff9642;">Authenticate</a>`;
+                        } else {
+                            cloudStatusEl.textContent = 'Not authenticated';
+                            cloudStatusEl.style.color = '#ff9642';
+                        }
+                    } else {
+                        cloudStatusEl.textContent = 'Disabled';
+                        cloudStatusEl.style.color = '#999';
+                    }
+                } else {
+                    cloudStatusEl.textContent = 'Unavailable';
+                    cloudStatusEl.style.color = '#999';
+                }
+            } catch (error) {
+                console.error('Failed to load status:', error);
+            }
+        }
+
+        function updateStatus(data) {
+            const statusBar = document.getElementById('status-bar');
+            statusBar.style.display = 'flex';
+            
+            document.getElementById('zone-count').textContent = data.count || 0;
+            
+            const now = new Date();
+            document.getElementById('last-update').textContent = now.toLocaleTimeString();
+        }
+
+        // Calculate dew point using Magnus formula
+        function calculateDewPoint(temp, humidity) {
+            if (temp === null || temp === undefined || humidity === null || humidity === undefined) {
+                return null;
+            }
+            const a = 17.27;
+            const b = 237.7;
+            const alpha = ((a * temp) / (b + temp)) + Math.log(humidity / 100.0);
+            const dewPoint = (b * alpha) / (a - alpha);
+            return Math.round(dewPoint * 10) / 10; // Round to 1 decimal
+        }
+
+        // Determine comfort level based on temperature, humidity, and dew point
+        function getComfortLevel(temp, humidity, dewPoint) {
+            if (temp === null || humidity === null || dewPoint === null) {
+                return { status: 'unknown', icon: '❓', label: 'Unknown' };
+            }
+
+            // Comfort levels considering both dew point AND humidity percentage
+            // High humidity (>70%) at any temperature is uncomfortable
+            if (humidity > 70) {
+                if (humidity > 85) {
+                    return { status: 'oppressive', icon: '🥵', label: 'Very Humid' };
+                } else if (humidity > 75) {
+                    return { status: 'unpleasant', icon: '😓', label: 'Humid' };
+                } else {
+                    return { status: 'uncomfortable', icon: '😐', label: 'Humid' };
+                }
+            }
+            
+            // Low humidity (<30%) is dry
+            if (humidity < 30) {
+                return { status: 'dry', icon: '🏜️', label: 'Dry' };
+            }
+            
+            // For normal humidity range (30-70%), use dew point for comfort
+            if (dewPoint < 10) {
+                return { status: 'comfortable', icon: '😊', label: 'Comfortable' };
+            } else if (dewPoint >= 10 && dewPoint < 13) {
+                return { status: 'comfortable', icon: '😊', label: 'Comfortable' };
+            } else if (dewPoint >= 13 && dewPoint < 16) {
+                return { status: 'comfortable', icon: '😊', label: 'Comfortable' };
+            } else if (dewPoint >= 16 && dewPoint < 18) {
+                return { status: 'ok', icon: '🙂', label: 'OK' };
+            } else if (dewPoint >= 18 && dewPoint < 21) {
+                return { status: 'uncomfortable', icon: '😐', label: 'Uncomfortable' };
+            } else if (dewPoint >= 21 && dewPoint < 24) {
+                return { status: 'unpleasant', icon: '😓', label: 'Humid' };
+            } else {
+                return { status: 'oppressive', icon: '🥵', label: 'Very Humid' };
+            }
+        }
+
+        function renderZones() {
+            const grid = document.getElementById('zones-grid');
+            
+            if (zones.length === 0) {
+                grid.innerHTML = '<div class="loading">No zones found</div>';
+                return;
+            }
+
+            grid.innerHTML = zones.map(zone => {
+                const state = zone.state || {};
+                const temp = state.cur_temp_c;
+                const humidity = state.hum_perc;
+                const target = state.target_temp_c || '--';
+                const mode = state.mode || 0;
+                const curHeating = state.cur_heating || 0;
+                const batteryLow = state.battery_low;
+                
+                // Format temperature with one decimal, split for styling
+                let tempHtml = '--';
+                if (temp !== null && temp !== undefined) {
+                    const tempStr = temp.toFixed(1);
+                    const parts = tempStr.split('.');
+                    tempHtml = `${parts[0]}<span class="zone-temp-decimal">.${parts[1]}</span>`;
+                }
+                
+                let cardClass = 'zone-card';
+                let statusText = '';
+                
+                if (mode === 0) {
+                    // Off / Frost protection
+                    cardClass += ' off';
+                    statusText = 'Off';
+                } else {
+                    // Mode is on (heating enabled)
+                    // Color by actual current temperature regardless of heating status
+                    if (temp !== null && temp !== undefined && temp < 17) {
+                        cardClass += ' heating-cold';
+                    } else if (temp !== null && temp !== undefined && temp <= 22) {
+                        cardClass += ' heating-medium';
+                    } else if (temp !== null && temp !== undefined) {
+                        cardClass += ' heating-hot';
+                    } else {
+                        // No temperature data, default to medium
+                        cardClass += ' heating-medium';
+                    }
+                    
+                    // Status text depends on whether actively heating/cooling
+                    if (curHeating === 1) {
+                        statusText = `Heating to ${target}°`;
+                    } else if (curHeating === 2) {
+                        statusText = `Cooling to ${target}°`;
+                    } else {
+                        statusText = `Target ${target}°`;
+                    }
+                }
+
+                // Show icon based on cur_heating state
+                // 0 = off (no icon), 1 = heating (flame), 2 = cooling (frost/snowflake)
+                let activityIcon = '';
+                if (curHeating === 1) {
+                    activityIcon = '<div class="flame-icon">🔥</div>';
+                } else if (curHeating === 2) {
+                    activityIcon = '<div class="flame-icon">❄️</div>';
+                }
+                
+                // Format humidity if available
+                const humidityHtml = (humidity !== null && humidity !== undefined) 
+                    ? `<div class="zone-humidity">Humidity ${humidity}%</div>` 
+                    : '';
+
+                // Calculate dew point and comfort level
+                const dewPoint = calculateDewPoint(temp, humidity);
+                const comfort = getComfortLevel(temp, humidity, dewPoint);
+                const comfortHtml = (dewPoint !== null) 
+                    ? `<div class="zone-comfort">${comfort.icon} ${comfort.label}</div>` 
+                    : '';
+
+                return `
+                    <div class="${cardClass}" data-zone-id="${zone.zone_id}" onclick="openZoneModal(${zone.zone_id})">
+                        ${activityIcon}
+                        <div>
+                            <div class="zone-temp">${tempHtml}<span class="zone-temp-unit">°</span></div>
+                            <div class="zone-name">${zone.name}</div>
+                            <div class="zone-status">${statusText}</div>
+                            ${humidityHtml}
+                            ${comfortHtml}
+                            ${batteryLow ? '<div class="battery-low">⚠️ Low battery</div>' : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function openZoneModal(zoneId) {
+            currentZone = zones.find(z => z.zone_id === zoneId);
+            if (!currentZone) return;
+
+            const state = currentZone.state || {};
+            
+            document.getElementById('modal-zone-name').textContent = currentZone.name;
+            document.getElementById('modal-current-temp').textContent = 
+                `${state.cur_temp_c || '--'}°`;
+            
+            // Show battery warning if needed
+            const batteryWarning = document.getElementById('modal-battery-warning');
+            if (state.battery_low) {
+                batteryWarning.style.display = 'block';
+            } else {
+                batteryWarning.style.display = 'none';
+            }
+            
+            tempValue = state.target_temp_c || 20;
+            modeValue = (state.mode === 0) ? 'off' : 'heat';
+            
+            updateTempDisplay();
+            updateModeButtons();
+            
+            document.getElementById('modal').classList.add('active');
+        }
+
+        function closeModal() {
+            document.getElementById('modal').classList.remove('active');
+        }
+
+        function updateTempDisplay() {
+            document.getElementById('temp-display').textContent = `${tempValue}°`;
+        }
+
+        function updateModeButtons() {
+            document.getElementById('mode-heat').classList.toggle('active', modeValue === 'heat');
+            document.getElementById('mode-off').classList.toggle('active', modeValue === 'off');
+        }
+
+        async function applyChanges() {
+            if (!currentZone) return;
+
+            const params = new URLSearchParams();
+            params.append('target_temperature', tempValue);
+            params.append('heating_enabled', modeValue === 'heat' ? 'true' : 'false');
+
+            try {
+                const response = await fetch(`/zones/${currentZone.zone_id}/control?${params}`, {
+                    method: 'POST'
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to update zone');
+                }
+
+                closeModal();
+                
+                // Reload zones after a short delay
+                setTimeout(loadZones, 1000);
+            } catch (error) {
+                showError('Failed to update zone: ' + error.message);
+            }
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('error-message');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            setTimeout(() => {
+                errorDiv.style.display = 'none';
+            }, 5000);
+        }
+
+        // Setup Server-Sent Events for live updates
+        function setupEventStream() {
+            // Close existing connection if any
+            if (eventSource) {
+                eventSource.close();
+            }
+
+            eventSource = new EventSource('/events/zones');
+            
+            eventSource.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    
+                    if (data.type === 'zone') {
+                        // Update specific zone in our zones array
+                        const zoneIndex = zones.findIndex(z => z.zone_id === data.zone_id);
+                        if (zoneIndex !== -1) {
+                            zones[zoneIndex].state = data.state;
+                            // Re-render zones to show updated state
+                            renderZones();
+                        }
+                    } else if (data.type === 'keepalive') {
+                        // Connection is alive
+                        console.debug('SSE keepalive');
+                    }
+                } catch (error) {
+                    console.error('Error parsing SSE data:', error);
+                }
+            };
+
+            eventSource.onerror = (error) => {
+                console.error('SSE connection error:', error);
+                eventSource.close();
+                
+                // Reconnect after 5 seconds
+                setTimeout(setupEventStream, 5000);
+            };
+
+            eventSource.onopen = () => {
+                console.log('SSE connection established');
+            };
+        }
+
+        // Event listeners
+        document.getElementById('temp-up').addEventListener('click', () => {
+            if (tempValue < 30) {
+                tempValue += 0.5;
+                updateTempDisplay();
+            }
+        });
+
+        document.getElementById('temp-down').addEventListener('click', () => {
+            if (tempValue > 5) {
+                tempValue -= 0.5;
+                updateTempDisplay();
+            }
+        });
+
+        document.getElementById('mode-heat').addEventListener('click', () => {
+            modeValue = 'heat';
+            updateModeButtons();
+        });
+
+        document.getElementById('mode-off').addEventListener('click', () => {
+            modeValue = 'off';
+            updateModeButtons();
+        });
+
+        document.getElementById('btn-cancel').addEventListener('click', closeModal);
+        document.getElementById('btn-apply').addEventListener('click', applyChanges);
+
+        document.getElementById('modal').addEventListener('click', (e) => {
+            if (e.target.id === 'modal') {
+                closeModal();
+            }
+        });
+
+        // Close modal on Escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                const modal = document.getElementById('modal');
+                if (modal.style.display === 'flex') {
+                    closeModal();
+                }
+            }
+        });
+
+        // Initialize
+        loadZones();
+        loadStatus();
+        setupEventStream();
+        
+        // Fallback: Still refresh periodically in case SSE fails
+        setInterval(loadZones, 60000); // Every minute as fallback
+    </script>
+</body>
+</html>

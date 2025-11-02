@@ -47,10 +47,11 @@ tado-local/
 
 | Component | Technology | Purpose |
 |-----------|-----------|---------|
-| HomeKit Protocol | `aiohomekit` | Direct communication with Tado bridge |
+| HomeKit Protocol | `aiohomekit` | Direct communication with Tado bridge for local control |
+| Cloud API | Tado OAuth2 API | Device metadata, battery status, zone configuration |
 | REST API | `FastAPI` | Modern async web framework with auto-docs |
 | Web Server | `uvicorn` | ASGI server for FastAPI |
-| Database | `SQLite` | State persistence and history |
+| Database | `SQLite` | State persistence, history, and credentials |
 | Real-Time Events | Server-Sent Events (SSE) | Live state updates to clients |
 | Async Runtime | `asyncio` | Efficient I/O handling |
 | Cryptography | `cryptography` | HomeKit pairing encryption |
@@ -61,7 +62,7 @@ tado-local/
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                     Client Applications                      │
-│  (Home Automation, Scripts, Web UI, Mobile Apps)            │
+│  (Domoticz, Home Automation, Scripts, Web UI)               │
 └────────────────┬────────────────────────────────────────────┘
                  │ HTTP REST / SSE
                  ▼
@@ -76,21 +77,35 @@ tado-local/
 │  ┌──────────────┐  ┌──────▼───────┐  ┌──────▼───────┐     │
 │  │  TadoBridge  │  │   IpPairing  │  │   SQLite     │     │
 │  │   (Pairing)  │  │  (HomeKit)   │  │  Database    │     │
-│  └──────────────┘  └──────┬───────┘  └──────────────┘     │
-└─────────────────────────────┼──────────────────────────────┘
-                              │ HomeKit over IP
-                              ▼
-                  ┌─────────────────────┐
-                  │  Tado Internet      │
-                  │  Bridge (HomeKit)   │
-                  └─────────┬───────────┘
-                            │ Wireless
-                            ▼
-                  ┌─────────────────────┐
-                  │  Tado Thermostats   │
-                  │  & Smart Radiator   │
-                  │  Thermostats        │
-                  └─────────────────────┘
+│  └──────────────┘  └──────┬───────┘  └──────┬───────┘     │
+│                            │                  │              │
+│  ┌──────────────┐  ┌──────▼───────┐  ┌──────▼───────┐     │
+│  │ TadoCloudAPI │  │ OAuth2 Token │  │ Cloud Cache  │     │
+│  │ (Metadata)   │  │  Management  │  │ (4hr refresh)│     │
+│  └──────┬───────┘  └──────────────┘  └──────────────┘     │
+└─────────┼───────────────┬──────────────────────────────────┘
+          │               │ HomeKit over IP
+          │               ▼
+          │     ┌─────────────────────┐
+          │     │  Tado Internet      │
+          │     │  Bridge (HomeKit)   │
+          │     └─────────┬───────────┘
+          │               │ Wireless
+          │               ▼
+          │     ┌─────────────────────┐
+          │     │  Tado Thermostats   │
+          │     │  & Smart Radiator   │
+          │     │  Thermostats        │
+          │     └─────────────────────┘
+          │ HTTPS (every 4 hours)
+          ▼
+┌─────────────────────┐
+│  Tado Cloud API     │
+│  (OAuth2)           │
+│  - Battery status   │
+│  - Device metadata  │
+│  - Zone names       │
+└─────────────────────┘
 ```
 
 ## Core Modules
@@ -177,23 +192,29 @@ class TadoLocalAPI:
 
 **Change Detection Strategy**:
 
-The API uses a **dual-source approach** for reliability:
+The API uses a **triple-source approach** for reliability:
 
 1. **HomeKit Events (Primary)**: Real-time notifications from bridge
    - Subscribe to all characteristics with `ev` permission
-   - Instant updates when values change
+   - Instant updates for temperature, heating state, valve position
    - Register dispatcher callback for all events
 
-2. **Polling System (Backup)**:
-   - **Fast Poll (60s)**: Priority characteristics (humidity, battery)
-   - **Slow Poll (120s)**: All other characteristics
+2. **HomeKit Polling (Backup)**:
+   - **Fast Poll (60s)**: Priority characteristics (humidity) that don't reliably send events
+   - **Slow Poll (120s)**: All characteristics as safety net
    - Detects missed events or stale values
    - Compares polled values against last known state
 
-3. **Change Tracking**:
+3. **Cloud API Sync (Metadata)**:
+   - **Every 4 hours**: Battery status, device metadata, zone configuration
+   - Uses ETag caching (304 responses) to minimize data transfer
+   - OAuth2 token auto-refresh on-demand
+   - Only 6 requests per day (well within 100/day limit)
+
+4. **Change Tracking**:
    - `last_values` dict stores previous values
    - Only logs/saves when values actually change
-   - Tracks source (`EVENT` vs `POLLING`) for diagnostics
+   - Tracks source (`EVENT`, `POLLING`, or `CLOUD`) for diagnostics
 
 ---
 
@@ -505,6 +526,32 @@ CREATE TABLE pairings (
 );
 ```
 
+#### `tado_cloud_auth`
+```sql
+CREATE TABLE tado_cloud_auth (
+    id INTEGER PRIMARY KEY,
+    home_id TEXT UNIQUE,
+    access_token TEXT,
+    refresh_token TEXT,
+    token_expires_at TIMESTAMP,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+```
+
+#### `tado_cloud_cache`
+```sql
+CREATE TABLE tado_cloud_cache (
+    home_id TEXT,
+    endpoint TEXT,              -- e.g., '/zones', '/deviceList'
+    response_data TEXT,         -- JSON response
+    etag TEXT,                  -- For conditional requests
+    fetched_at TIMESTAMP,
+    expires_at TIMESTAMP,       -- Cache lifetime (4 hours)
+    PRIMARY KEY (home_id, endpoint)
+);
+```
+
 #### `controller_identity`
 ```sql
 CREATE TABLE controller_identity (
@@ -568,7 +615,120 @@ CREATE TABLE zones (
 
 ---
 
-### 8. `homekit_uuids.py` - UUID Mappings
+### 8. `cloud.py` - Tado Cloud API Integration
+
+**Location**: `tado_local/cloud.py`  
+**Lines**: ~950  
+**Purpose**: OAuth2 authentication and cloud data synchronization
+
+**Key Responsibilities**:
+- OAuth2 device flow authentication (browser-based login)
+- Token management (access token, refresh token, auto-refresh)
+- API rate limit tracking (100 requests/day)
+- Response caching with ETag support (4-hour lifetime)
+- Background sync task (every 4 hours)
+
+**Core Components**:
+
+```python
+class TadoCloudAPI:
+    # Authentication
+    home_id: str                           # Tado home ID
+    access_token: str                      # Current OAuth2 access token
+    refresh_token: str                     # For token renewal
+    token_expires_at: float                # Token expiry timestamp
+    
+    # OAuth device flow state
+    device_code: str                       # During authentication
+    auth_verification_uri: str             # Browser URL for user
+    auth_user_code: str                    # Code to enter
+    
+    # Rate limiting
+    rate_limit: RateLimit                  # 100/day tracking
+    
+    # Background sync
+    _refresh_task: asyncio.Task            # 4-hour sync loop
+```
+
+**Key Methods**:
+
+| Method | Purpose |
+|--------|---------|
+| `authenticate()` | Start OAuth2 device flow, poll for completion |
+| `ensure_authenticated()` | Check token validity, refresh if needed |
+| `get_home_info()` | Fetch home details (cached 4 hours) |
+| `get_zones()` | Fetch zone configuration (cached 4 hours) |
+| `get_zone_states()` | Fetch battery status (cached 4 hours) |
+| `get_device_list()` | Fetch device metadata (cached 4 hours) |
+| `start_background_sync()` | Start 4-hour sync task |
+| `_background_sync_loop()` | Periodic sync with retry logic |
+
+**Authentication Flow**:
+
+```python
+# Device flow (browser-based)
+1. POST /oauth/device - Get device_code, user_code, verification_uri
+2. Display URL to user: https://app.tado.com/oauth/device?user_code=ABC-DEF
+3. Poll POST /oauth/token every 5s until user completes login
+4. Store access_token, refresh_token in database
+5. Auto-refresh token before expiry using refresh_token
+```
+
+**Caching Strategy**:
+
+- **ETag Support**: 304 responses when data unchanged
+- **4-hour lifetime**: Balance freshness vs API limits
+- **Per-endpoint cache**: Separate expiry for home, zones, devices
+- **6 requests/day**: 4 endpoints × 6 syncs = 24 API calls (well under 100 limit)
+
+---
+
+### 9. `sync.py` - Cloud to Database Sync
+
+**Location**: `tado_local/sync.py`  
+**Lines**: ~400  
+**Purpose**: Synchronize cloud API data to local SQLite database
+
+**Key Responsibilities**:
+- Parse cloud API responses
+- Update device metadata (model, manufacturer, battery state)
+- Create/update zones and zone assignments
+- Match cloud devices to HomeKit devices via serial numbers
+
+**Core Method**:
+
+```python
+class TadoCloudSync:
+    async def sync_all(self, cloud_api) -> bool:
+        """
+        Comprehensive sync from cloud to database.
+        
+        Steps:
+        1. Fetch home info, zones, zone states, device list from cloud
+        2. For each zone: Create/update in DB, parse battery status
+        3. For each device: Match by serial, update metadata and zone
+        4. Set zone leaders based on device types
+        """
+```
+
+**Device Matching**:
+
+```python
+# Match cloud devices to local devices by serial number
+cloud_device = {"shortSerialNo": "RU1234567890", "batteryState": "NORMAL"}
+local_device_id = get_device_id_by_serial("RU1234567890")
+
+# Update local device with cloud metadata
+UPDATE devices SET 
+    battery_state = 'NORMAL',
+    device_type = 'RU02',
+    zone_id = 4
+WHERE device_id = local_device_id
+```
+
+---
+
+### 10. `homekit_uuids.py` - UUID Mappings
 
 **Location**: `tado_local/homekit_uuids.py` (and legacy in root)  
 **Purpose**: Human-readable names for HomeKit UUIDs
@@ -604,36 +764,48 @@ CHARACTERISTIC_UUIDS = {
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │ 1. Command Line Parsing                                      │
-│    python -m tado_local --bridge-ip 192.168.1.100           │
+│    First run: python -m tado_local --bridge-ip IP --pin PIN │
+│    Subsequent: python -m tado_local (auto-discovers)        │
 └────────────────┬────────────────────────────────────────────┘
                  ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ 2. Database Initialization                                   │
 │    - Create/open ~/.tado-local.db                           │
-│    - Execute schema (pairings, devices, zones, history)     │
+│    - Execute schema (pairings, cloud_auth, devices, zones)  │
 └────────────────┬────────────────────────────────────────────┘
                  ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 3. Pairing Setup (TadoBridge.pair_or_load)                  │
+│ 3. HomeKit Pairing Setup (TadoBridge.pair_or_load)          │
 │    ├─► Load existing pairing from DB                        │
 │    ├─► Test connection                                      │
-│    └─► Or perform fresh pairing with PIN                    │
+│    └─► Or perform fresh pairing with PIN (first run only)   │
 └────────────────┬────────────────────────────────────────────┘
                  ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 4. API Initialization (TadoLocalAPI.initialize)             │
+│ 4. Cloud API Setup (TadoCloudAPI)                           │
+│    ├─► Load OAuth2 tokens from DB                           │
+│    ├─► If not authenticated: Start OAuth flow               │
+│    │   └─► Display browser URL for user login              │
+│    ├─► If authenticated: Validate token                     │
+│    └─► Start 4-hour background sync task                    │
+└────────────────┬────────────────────────────────────────────┘
+                 ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 5. API Initialization (TadoLocalAPI.initialize)             │
 │    ├─► Refresh accessories from bridge                      │
+│    ├─► Sync device metadata from cloud                      │
 │    ├─► Register devices in database                         │
 │    ├─► Load last known state from history                   │
-│    ├─► Setup event subscriptions                            │
+│    ├─► Setup HomeKit event subscriptions                    │
 │    └─► Start background polling tasks                       │
 └────────────────┬────────────────────────────────────────────┘
                  ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 5. Web Server Start (uvicorn)                               │
+│ 6. Web Server Start (uvicorn)                               │
 │    - FastAPI app with all routes                            │
 │    - Listen on 0.0.0.0:4407                                 │
 │    - Interactive docs at /docs                              │
+│    - Status at /status shows cloud auth state               │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -795,9 +967,9 @@ Client HTTP Request
 
 ## Event System Design
 
-### Dual-Source Architecture
+### Triple-Source Architecture
 
-The event system uses **two complementary data sources** for maximum reliability:
+The event system uses **three complementary data sources** for maximum reliability:
 
 #### 1. HomeKit Event Subscriptions (Primary)
 
@@ -820,15 +992,15 @@ pairing.dispatcher_connect(event_callback)
 - Battery efficient for devices
 
 **Limitations**:
-- Some characteristics don't reliably send events (humidity, battery)
+- Some characteristics don't reliably send events (humidity)
 - Connection interruptions can miss events
 - Device firmware bugs may not fire events
 
-#### 2. Background Polling (Backup)
+#### 2. HomeKit Background Polling (Backup)
 
 ```python
 # Two polling speeds
-FAST_POLL = 60s   # Priority characteristics (humidity, battery)
+FAST_POLL = 60s   # Priority characteristics (humidity) that don't reliably send events
 SLOW_POLL = 120s  # Everything else (safety net)
 
 async def background_polling_loop():
@@ -853,6 +1025,39 @@ async def background_polling_loop():
 - More network traffic
 - Bridge processing overhead
 
+#### 3. Cloud API Sync (Metadata & Battery)
+
+```python
+# Background sync every 4 hours
+CLOUD_SYNC_INTERVAL = 4 * 3600  # 14400 seconds
+
+async def background_sync_loop():
+    while not shutting_down:
+        if is_authenticated():
+            # Fetch device metadata, battery status, zone config
+            home_info = await get_home_info()
+            zones = await get_zones()
+            zone_states = await get_zone_states()
+            devices = await get_device_list()
+            
+            # Update database with fresh metadata
+            await sync.sync_all(cloud_api)
+        
+        await asyncio.sleep(CLOUD_SYNC_INTERVAL)
+```
+
+**Advantages**:
+- Battery status (not available via HomeKit)
+- Device metadata (model, manufacturer, serial)
+- Zone names and configuration
+- Uses ETag caching (304 responses)
+- Only 6 requests/day (well within 100/day limit)
+
+**Limitations**:
+- Requires OAuth2 authentication
+- 4-hour latency for battery updates
+- Internet dependency
+
 ### Change Detection & Deduplication
 
 ```python
@@ -861,6 +1066,7 @@ change_tracker = {
     'last_values': {(aid, iid): value, ...},
     'events_received': count,
     'polling_changes': count,
+    'cloud_syncs': count,
 }
 
 async def handle_change(aid, iid, update_data, source):

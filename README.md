@@ -51,38 +51,49 @@ python local.py --help
 
 ## Setup & Usage
 
-### Initial Pairing
+### Initial Setup
 
-**First time only** - requires the HomeKit PIN from your Tado bridge label:
+**First time only** - requires both HomeKit PIN and Tado Cloud authentication:
 
 ```bash
-# Using the package (recommended)
+# Start with bridge IP and HomeKit PIN
 python -m tado_local --bridge-ip 192.168.1.100 --pin 123-45-678
 
 # Or using the console script
 tado-local --bridge-ip 192.168.1.100 --pin 123-45-678
-
-# Or using local.py (backward compatibility)
-python local.py --bridge-ip 192.168.1.100 --pin 123-45-678
 ```
 
-This performs initial pairing, stores connection credentials in the database, and starts the API server on port 4407.
+This performs:
+1. **HomeKit pairing** - Stores encrypted credentials for local bridge communication
+2. **Cloud API authentication** - Opens browser for OAuth login to fetch device metadata (battery status, zone names, etc.)
+3. Starts the API server on port 4407
+
+**Note**: The cloud authentication is a one-time setup. Visit the displayed URL in your browser, log in with your Tado credentials, and the proxy will automatically complete the setup.
+
+Check the console output or `http://localhost:4407/status` for the authentication URL if needed.
 
 ### Subsequent Runs
 
-After pairing, just provide the bridge IP:
-
-```bash
-python -m tado_local --bridge-ip 192.168.1.100
-
-# Or with custom options
-tado-local --bridge-ip 192.168.1.100 --port 8080 --state ./my-tado.db
-```
-
-Or if you have only one pairing, it auto-discovers:
+After setup is complete, simply run:
 
 ```bash
 python -m tado_local
+```
+
+The proxy will:
+- Auto-discover your bridge (if only one pairing exists)
+- Use stored HomeKit credentials for local control
+- Use stored cloud credentials for periodic metadata updates (every 4 hours)
+- Start the API server on port 4407
+
+**Custom options** (if needed):
+
+```bash
+# Specify bridge IP explicitly
+python -m tado_local --bridge-ip 192.168.1.100
+
+# Custom port or database location
+python -m tado_local --port 8080 --state ./my-tado.db
 ```
 
 ### Configuration Options
@@ -219,50 +230,51 @@ If the connection drops (power cycle, network issue):
 
 ### Database Issues
 
-To start fresh:
+To start fresh and re-pair:
 
 ```bash
-# Remove old database
+# Remove old database (clears both HomeKit pairing and cloud credentials)
 rm ~/.tado-local.db
 
-# Re-pair
-python local.py --bridge-ip 192.168.1.100 --pin 123-45-678
+# Re-run initial setup with bridge IP and PIN
+python -m tado_local --bridge-ip 192.168.1.100 --pin 123-45-678
 
-# Normal startup
-python local.py
-
-# More info
-python local.py --help
+# Complete cloud authentication in browser (URL shown in console)
+# Then the proxy is ready - future runs don't need any arguments
+python -m tado_local
 ```
 
-In the log and on http://127.0.0.1:4407/status you will then find a url that you can use to authenticate to
-the TADO cloud service to complete the setup. This should be a one time setup as all state is stored in the sqlite backend.
+The cloud authentication URL is displayed during initial setup and also available at `http://localhost:4407/status` under the `cloud_api` section.
 
 ## Architecture
 
 ### Technology Stack
 
-- **aiohomekit**: HomeKit protocol implementation
-- **FastAPI**: Modern REST API framework
-- **SQLite**: Persistent state and history storage
+- **aiohomekit**: HomeKit protocol implementation for local bridge control
+- **FastAPI**: Modern REST API framework with automatic OpenAPI docs
+- **Tado Cloud API**: OAuth2 authentication for device metadata and battery status
+- **SQLite**: Persistent state, history, and credentials storage
 - **uvicorn**: ASGI web server
-- **Python 3.9+**: Async/await for efficient I/O
+- **Python 3.11+**: Async/await for efficient I/O
 
 ### Database Schema
 
 SQLite database stores:
 - **HomeKit pairings**: Encrypted credentials for bridge authentication  
 - **Controller identity**: Persistent pairing identity across restarts
-- **Devices & zones**: Device registry with zone organization
+- **Cloud credentials**: OAuth2 tokens for Tado cloud API
+- **Devices & zones**: Device registry with zone organization and metadata
 - **State history**: Time-series data with 10-second bucketing
 - **Characteristic cache**: HomeKit accessory metadata
+- **Cloud cache**: Battery status, zone names, device types (refreshed every 4 hours)
 
 ### State Management
 
-- **Event-driven updates**: Real-time notifications from HomeKit bridge
+- **Event-driven updates**: Real-time notifications from HomeKit bridge for temperature, heating state, valve position
 - **Dual-speed polling**:
-  - Fast (60s): Humidity, battery level (characteristics that change slowly)
-  - Slow (120s): Temperature, valve position (polled less frequently)
+  - Fast (60s): Humidity, battery level (characteristics that don't reliably send events)
+  - Slow (120s): All characteristics as safety net
+- **Cloud sync** (every 4 hours): Battery status, device metadata, zone configuration from Tado Cloud API
 - **Change detection**: Only saves to database when values actually change
 - **Network resilience**: Ignores `None` values from connection issues; events restore state
 
@@ -376,17 +388,18 @@ MIT License - see LICENSE file for details.
 **Status**: Beta - Active development, production-ready for personal use
 
 The proxy successfully manages:
-- ✅ Temperature control
-- ✅ Humidity monitoring  
-- ✅ Battery status
-- ✅ Valve positions
-- ✅ Zone management
-- ✅ Real-time event streams
-- ✅ State persistence
-- ✅ Network resilience
+- ✅ Temperature control via HomeKit
+- ✅ Humidity monitoring (local sensors)
+- ✅ Battery status (cloud API, updated every 4 hours)
+- ✅ Valve positions (real-time)
+- ✅ Zone management and organization
+- ✅ Real-time event streams (SSE)
+- ✅ State persistence and history
+- ✅ Network resilience and auto-reconnection
+- ✅ Hybrid local + cloud architecture
 
 Known limitations:
 - Single HomeKit connection (bridge hardware limitation)
-- Package refactoring in progress
-- Documentation being expanded
+- Cloud authentication required for device metadata
+- Battery status updates every 4 hours (cloud API rate limits)
 

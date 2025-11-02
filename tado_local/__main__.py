@@ -80,7 +80,7 @@ async def run_server(args):
             else:
                 logger.info("Access token expired, will refresh on first API call")
         
-        # Start background 24-hour sync task (replaces continuous token refresh)
+        # Start background 4-hour sync task (replaces continuous token refresh)
         cloud_api.start_background_sync()
         
         # Store cloud_api reference in tado_api for use by routes
