@@ -358,6 +358,68 @@
         .footer .version-info a:hover {
             color: #ff6b1e;
         }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 0;
+            border-bottom: 2px solid #e0e0e0;
+            margin: 20px 0;
+        }
+
+        .tab-button {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            background: none;
+            color: #666;
+            font-size: 14px;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+            transition: all 0.2s;
+        }
+
+        .tab-button:hover {
+            color: #ff7b2e;
+        }
+
+        .tab-button.active {
+            color: #ff7b2e;
+            border-bottom-color: #ff7b2e;
+            font-weight: 500;
+        }
+
+        .tab-content {
+            animation: fadeIn 0.3s;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        /* History */
+        .history-controls {
+            display: flex;
+            justify-content: flex-end;
+            margin-bottom: 20px;
+        }
+
+        .history-select {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            background: white;
+            cursor: pointer;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 300px;
+            margin-bottom: 20px;
+        }
     </style>
 </head>
 <body>
@@ -402,26 +464,52 @@
                 <div id="modal-battery-warning" class="battery-low" style="display: none;">⚠️ Low battery</div>
             </div>
 
-            <div class="control-group">
-                <label class="control-label">Target Temperature</label>
-                <div class="temp-control">
-                    <button class="temp-button" id="temp-down">−</button>
-                    <div class="temp-display" id="temp-display">20°</div>
-                    <button class="temp-button" id="temp-up">+</button>
+            <!-- Tabs -->
+            <div class="tabs">
+                <button class="tab-button active" data-tab="controls">Controls</button>
+                <button class="tab-button" data-tab="history">History</button>
+            </div>
+
+            <!-- Controls Tab -->
+            <div class="tab-content" id="tab-controls">
+                <div class="control-group">
+                    <label class="control-label">Target Temperature</label>
+                    <div class="temp-control">
+                        <button class="temp-button" id="temp-down">−</button>
+                        <div class="temp-display" id="temp-display">20°</div>
+                        <button class="temp-button" id="temp-up">+</button>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <label class="control-label">Mode</label>
+                    <div class="mode-buttons">
+                        <button class="mode-button" id="mode-heat" data-mode="heat">Heat</button>
+                        <button class="mode-button" id="mode-off" data-mode="off">Off</button>
+                    </div>
+                </div>
+
+                <div class="action-buttons">
+                    <button class="btn btn-secondary" id="btn-cancel">Cancel</button>
+                    <button class="btn btn-primary" id="btn-apply">Apply</button>
                 </div>
             </div>
 
-            <div class="control-group">
-                <label class="control-label">Mode</label>
-                <div class="mode-buttons">
-                    <button class="mode-button" id="mode-heat" data-mode="heat">Heat</button>
-                    <button class="mode-button" id="mode-off" data-mode="off">Off</button>
+            <!-- History Tab -->
+            <div class="tab-content" id="tab-history" style="display: none;">
+                <div class="history-controls">
+                    <select id="history-period" class="history-select">
+                        <option value="24">Last 24 hours</option>
+                        <option value="168">Last 7 days</option>
+                        <option value="720">Last 30 days</option>
+                        <option value="8760">Last year</option>
+                    </select>
                 </div>
-            </div>
-
-            <div class="action-buttons">
-                <button class="btn btn-secondary" id="btn-cancel">Cancel</button>
-                <button class="btn btn-primary" id="btn-apply">Apply</button>
+                <div class="chart-container">
+                    <canvas id="history-chart"></canvas>
+                </div>
+                <div id="history-loading" class="loading" style="display: none;">Loading history...</div>
+                <div id="history-error" style="display: none; color: #c62828; padding: 20px; text-align: center;"></div>
             </div>
         </div>
     </div>
@@ -432,6 +520,208 @@
         let tempValue = 20;
         let modeValue = 'heat';
         let eventSource = null;
+        let chartJsLoaded = false;
+        let historyChart = null;
+
+        // Lazy load Chart.js and date adapter when history tab is first opened
+        async function loadChartJs() {
+            if (chartJsLoaded) return true;
+            
+            try {
+                // Load Chart.js
+                const chartScript = document.createElement('script');
+                chartScript.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js';
+                chartScript.async = true;
+                
+                await new Promise((resolve, reject) => {
+                    chartScript.onload = resolve;
+                    chartScript.onerror = reject;
+                    document.head.appendChild(chartScript);
+                });
+                
+                // Load date adapter for time scales
+                const adapterScript = document.createElement('script');
+                adapterScript.src = 'https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js';
+                adapterScript.async = true;
+                
+                await new Promise((resolve, reject) => {
+                    adapterScript.onload = resolve;
+                    adapterScript.onerror = reject;
+                    document.head.appendChild(adapterScript);
+                });
+                
+                chartJsLoaded = true;
+                return true;
+            } catch (error) {
+                console.error('Failed to load Chart.js:', error);
+                return false;
+            }
+        }
+
+        // Load and display history
+        async function loadHistory(zoneId, hours = 24) {
+            const loadingEl = document.getElementById('history-loading');
+            const errorEl = document.getElementById('history-error');
+            const canvas = document.getElementById('history-chart');
+            
+            // Show loading
+            loadingEl.style.display = 'block';
+            errorEl.style.display = 'none';
+            canvas.style.display = 'none';
+            
+            try {
+                // Ensure Chart.js is loaded
+                if (!chartJsLoaded) {
+                    const loaded = await loadChartJs();
+                    if (!loaded) throw new Error('Failed to load Chart.js library');
+                }
+                
+                // Calculate time range
+                const endTime = Math.floor(Date.now() / 1000);
+                const startTime = endTime - (hours * 3600);
+                
+                // Fetch history data
+                const response = await fetch(`/zones/${zoneId}/history?start_time=${startTime}&end_time=${endTime}&limit=1000`);
+                if (!response.ok) throw new Error('Failed to load history');
+                
+                const data = await response.json();
+                
+                if (!data.history || data.history.length === 0) {
+                    errorEl.textContent = 'No history data available for this period';
+                    errorEl.style.display = 'block';
+                    loadingEl.style.display = 'none';
+                    return;
+                }
+                
+                // Transform data for step chart (changes only!)
+                const tempData = [];
+                const targetTempData = [];
+                const heatingData = [];
+                const labels = [];
+                
+                // Reverse to get chronological order (API returns DESC)
+                const history = data.history.reverse();
+                
+                for (const record of history) {
+                    const timestamp = new Date(record.timestamp);
+                    const state = record.state;
+                    
+                    labels.push(timestamp);
+                    tempData.push(state.cur_temp_c);
+                    targetTempData.push(state.target_temp_c);
+                    heatingData.push(state.cur_heating === 1 ? state.cur_temp_c : null); // Show temp when heating
+                }
+                
+                // Destroy existing chart if any
+                if (historyChart) {
+                    historyChart.destroy();
+                    historyChart = null;
+                }
+                
+                // Create step chart
+                canvas.style.display = 'block';
+                loadingEl.style.display = 'none';
+                
+                const ctx = canvas.getContext('2d');
+                historyChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            {
+                                label: 'Current Temp',
+                                data: tempData,
+                                borderColor: '#2196F3',
+                                backgroundColor: 'rgba(33, 150, 243, 0.1)',
+                                stepped: 'before', // STEP CHART - holds value until next change
+                                borderWidth: 2,
+                                pointRadius: 0,
+                                fill: false
+                            },
+                            {
+                                label: 'Target Temp',
+                                data: targetTempData,
+                                borderColor: '#FF7B2E',
+                                backgroundColor: 'rgba(255, 123, 46, 0.1)',
+                                stepped: 'before', // STEP CHART - holds value until next change
+                                borderWidth: 2,
+                                borderDash: [5, 5],
+                                pointRadius: 0,
+                                fill: false
+                            },
+                            {
+                                label: 'Heating Active',
+                                data: heatingData,
+                                borderColor: '#F44336',
+                                backgroundColor: 'rgba(244, 67, 54, 0.2)',
+                                stepped: 'before', // STEP CHART
+                                borderWidth: 3,
+                                pointRadius: 0,
+                                fill: '+1' // Fill between current temp and this line when heating
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: {
+                            mode: 'index',
+                            intersect: false
+                        },
+                        plugins: {
+                            legend: {
+                                display: true,
+                                position: 'bottom'
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(context) {
+                                        let label = context.dataset.label || '';
+                                        if (label) {
+                                            label += ': ';
+                                        }
+                                        if (context.parsed.y !== null) {
+                                            label += context.parsed.y.toFixed(1) + '°C';
+                                        }
+                                        return label;
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                type: 'time',
+                                time: {
+                                    unit: hours <= 48 ? 'hour' : hours <= 720 ? 'day' : 'week',
+                                    displayFormats: {
+                                        hour: 'MMM d, HH:mm',
+                                        day: 'MMM d',
+                                        week: 'MMM d'
+                                    }
+                                },
+                                ticks: {
+                                    maxRotation: 45,
+                                    minRotation: 45
+                                }
+                            },
+                            y: {
+                                title: {
+                                    display: true,
+                                    text: 'Temperature (°C)'
+                                },
+                                beginAtZero: false
+                            }
+                        }
+                    }
+                });
+                
+            } catch (error) {
+                errorEl.textContent = 'Failed to load history: ' + error.message;
+                errorEl.style.display = 'block';
+                loadingEl.style.display = 'none';
+                console.error('History error:', error);
+            }
+        }
 
         // Load zones
         async function loadZones() {
@@ -674,10 +964,23 @@
             updateTempDisplay();
             updateModeButtons();
             
+            // Reset to controls tab
+            document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
+            document.querySelector('[data-tab="controls"]').classList.add('active');
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.style.display = 'none';
+            });
+            document.getElementById('tab-controls').style.display = 'block';
+            
             document.getElementById('modal').classList.add('active');
         }
 
         function closeModal() {
+            // Destroy chart when closing modal to free resources
+            if (historyChart) {
+                historyChart.destroy();
+                historyChart = null;
+            }
             document.getElementById('modal').classList.remove('active');
         }
 
@@ -732,7 +1035,7 @@
                 eventSource.close();
             }
 
-            eventSource = new EventSource('/events/zones');
+            eventSource = new EventSource('/events?types=zone');
             
             eventSource.onmessage = (event) => {
                 try {
@@ -799,6 +1102,37 @@
         document.getElementById('modal').addEventListener('click', (e) => {
             if (e.target.id === 'modal') {
                 closeModal();
+            }
+        });
+
+        // Tab switching
+        document.querySelectorAll('.tab-button').forEach(button => {
+            button.addEventListener('click', (e) => {
+                const tab = e.target.dataset.tab;
+                
+                // Update button states
+                document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
+                e.target.classList.add('active');
+                
+                // Show/hide tab content
+                document.querySelectorAll('.tab-content').forEach(content => {
+                    content.style.display = 'none';
+                });
+                document.getElementById(`tab-${tab}`).style.display = 'block';
+                
+                // Load history when history tab is opened
+                if (tab === 'history' && currentZone) {
+                    const hours = parseInt(document.getElementById('history-period').value);
+                    loadHistory(currentZone.zone_id, hours);
+                }
+            });
+        });
+
+        // History period change
+        document.getElementById('history-period').addEventListener('change', (e) => {
+            if (currentZone) {
+                const hours = parseInt(e.target.value);
+                loadHistory(currentZone.zone_id, hours);
             }
         });
 

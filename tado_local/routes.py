@@ -909,7 +909,8 @@ def register_routes(app: FastAPI, get_tado_api):
         thermostat_id: int,
         start_time: Optional[float] = None,
         end_time: Optional[float] = None,
-        limit: int = 100
+        limit: int = 100,
+        offset: int = 0
     ):
         """
         Get thermostat state history (forwarded to device history).
@@ -919,9 +920,10 @@ def register_routes(app: FastAPI, get_tado_api):
             start_time: Start timestamp (Unix epoch)
             end_time: End timestamp (Unix epoch)
             limit: Maximum number of records to return (default: 100)
+            offset: Number of records to skip for pagination (default: 0)
         """
         # Forward to device history
-        return await get_device_history(thermostat_id, start_time, end_time, limit)
+        return await get_device_history(thermostat_id, start_time, end_time, limit, offset)
 
     @app.post("/thermostats/{thermostat_id}/set", tags=["Thermostats"])
     async def set_thermostat(
@@ -992,7 +994,8 @@ def register_routes(app: FastAPI, get_tado_api):
         zone_id: int,
         start_time: Optional[float] = None,
         end_time: Optional[float] = None,
-        limit: int = 100
+        limit: int = 100,
+        offset: int = 0
     ):
         """
         Get zone state history via the zone's leader device.
@@ -1002,6 +1005,7 @@ def register_routes(app: FastAPI, get_tado_api):
             start_time: Start timestamp (Unix epoch)
             end_time: End timestamp (Unix epoch)
             limit: Maximum number of records to return (default: 100)
+            offset: Number of records to skip for pagination (default: 0)
         
         Notes:
             - Returns history from the zone's leader device
@@ -1030,7 +1034,7 @@ def register_routes(app: FastAPI, get_tado_api):
             raise HTTPException(status_code=400, detail=f"Zone '{zone_name}' has no leader device assigned")
         
         # Get leader device history
-        result = await get_device_history(leader_device_id, start_time, end_time, limit)
+        result = await get_device_history(leader_device_id, start_time, end_time, limit, offset)
         result['zone_id'] = zone_id
         result['zone_name'] = zone_name
         result['leader_device_id'] = leader_device_id
