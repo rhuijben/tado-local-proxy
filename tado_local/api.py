@@ -417,10 +417,15 @@ class TadoLocalAPI:
             is_zone_leader = device_info.get('is_zone_leader', False)
             
             # Update device state manager
-            if device_id and device_id in self.accessories_dict:
-                accessory = self.accessories_dict[device_id]
+            if device_id:
+                # Find the accessory by aid (since events come with aid, not device_id)
+                accessory = None
+                for acc in self.accessories_cache:
+                    if acc.get('aid') == aid:
+                        accessory = acc
+                        break
                 
-                if accessory.get('id'):
+                if accessory and accessory.get('id'):
                     # Find the characteristic type for this aid/iid
                     char_type = None
                     for service in accessory.get('services', []):

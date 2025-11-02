@@ -206,10 +206,11 @@ class TadoCloudSync:
                     synced_devices += 1
                     
                     # Update zone leader if this device is the leader
-                    if is_leader:
-                        cursor.execute("""
-                            UPDATE zones SET leader_device_id = ? WHERE zone_id = ?
-                        """, (device_id, zone_id))
+                    # DISABLED: Tado handles circuit driver relationships internally
+                    # if is_leader:
+                    #     cursor.execute("""
+                    #         UPDATE zones SET leader_device_id = ? WHERE zone_id = ?
+                    #     """, (device_id, zone_id))
             
             conn.commit()
             conn.close()
