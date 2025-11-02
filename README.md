@@ -9,11 +9,11 @@
 
 Tado Local is a lightweight bridge that connects your Tado smart heating system directly to your home automation setup. It provides:
 
-- **🏠 Beautiful Web UI** - Control your zones with an intuitive interface
-- **📊 Visual History** - See temperature, humidity, and heating patterns over time
-- **⚡ REST API** - Integrate with any smart home platform (Domoticz, Home Assistant, openHAB, etc.)
-- **🔄 Real-time Updates** - Instant notifications when temperatures change
-- **💾 Local Storage** - All your data stays on your network
+- **🏠 Web UI** - Control interface for managing zones and viewing history
+- **📊 Visual History** - Charts showing temperature, humidity, and heating patterns over time
+- **⚡ REST API** - Integration endpoint for any smart home platform (Domoticz, Home Assistant, openHAB, etc.)
+- **🔄 Real-time Updates** - Server-Sent Events for instant state changes
+- **💾 Local Storage** - SQLite database keeping all data on your network
 
 ### Why Choose Local Control?
 
@@ -27,15 +27,15 @@ Tado's cloud API has strict rate limits that can break home automation integrati
 
 ### Web Interface - Zone Overview
 ![Zone Overview](docs/images/zone-overview.png)
-*Monitor all your rooms at a glance with real-time temperature, humidity, and status updates.*
+*All zones with real-time temperature, humidity, and status.*
 
 ### Web Interface - Zone Control
 ![Zone Control](docs/images/zone-control.png)
-*Adjust temperatures and switch between heating modes with a clean, responsive interface.*
+*Temperature adjustment and heating mode controls.*
 
 ### Web Interface - Visual History
 ![Visual History](docs/images/history-chart.png)
-*Track temperature trends, heating activity, and humidity levels over hours, days, or months with interactive charts.*
+*Temperature, heating activity, and humidity tracking with interactive charts.*
 
 ---
 
@@ -55,7 +55,7 @@ Tado's cloud API has strict rate limits that can break home automation integrati
 ## ✨ Features
 
 - **Local Control**: Direct communication with Tado bridge via HomeKit - no cloud required
-- **🎨 Web UI**: Beautiful, responsive interface for controlling your heating
+- **🎨 Web UI**: HTML interface for controlling heating zones
 - **📈 Visual History**: Interactive charts showing temperature, humidity, and heating patterns
 - **Clean REST API**: Simple HTTP endpoints for easy integration
 - **Real-time Events**: Server-Sent Events (SSE) stream for live updates
