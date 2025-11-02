@@ -706,14 +706,18 @@ def register_routes(app: FastAPI, get_tado_api):
         
         Args:
             device_id: Device ID to control
-            temperature: Target temperature in °C (5-30). If > 5°C, implies heating_enabled=true unless explicitly set to false
+            temperature: Target temperature in °C (0-30).
+                        - 0 = disable heating (implies heating_enabled=false)
+                        - >= 5 = enable heating (implies heating_enabled=true unless explicitly set to false)
             heating_enabled: Enable/disable heating mode (true/false)
         
         Returns:
             Success status and applied values
             
         Notes:
-            - Smart default: Setting temperature >= 5°C implies heating_enabled=true
+            - Smart defaults:
+              - temperature = 0 implies heating_enabled=false
+              - temperature >= 5°C implies heating_enabled=true
             - Commands are forwarded to the device's zone leader
             - If device is not in a zone, direct control is attempted
         """
@@ -740,9 +744,12 @@ def register_routes(app: FastAPI, get_tado_api):
             # Forward to zone control
             logger.info(f"Device {device_id} ({device_name}): Forwarding control to zone {zone_id}")
             
-            # Apply smart default
-            if temperature is not None and temperature >= 5.0 and heating_enabled is None:
-                heating_enabled = True
+            # Apply smart defaults
+            if temperature is not None and heating_enabled is None:
+                if temperature == 0:
+                    heating_enabled = False
+                elif temperature >= 5.0:
+                    heating_enabled = True
             
             result = await control_zone(zone_id, temperature, heating_enabled)
             result['controlled_via'] = 'zone'
@@ -763,14 +770,18 @@ def register_routes(app: FastAPI, get_tado_api):
         
         Args:
             device_id: Thermostat device ID to control
-            temperature: Target temperature in °C (5-30). If > 5°C, implies heating_enabled=true unless explicitly set to false
+            temperature: Target temperature in °C (0-30).
+                        - 0 = disable heating (implies heating_enabled=false)
+                        - >= 5 = enable heating (implies heating_enabled=true unless explicitly set to false)
             heating_enabled: Enable/disable heating mode (true/false)
         
         Returns:
             Success status and applied values
             
         Notes:
-            - Smart default: Setting temperature >= 5°C implies heating_enabled=true
+            - Smart defaults:
+              - temperature = 0 implies heating_enabled=false
+              - temperature >= 5°C implies heating_enabled=true
             - Commands are forwarded to the device's zone leader
             - Alias for /devices/{id}/set with thermostat-specific naming
         """

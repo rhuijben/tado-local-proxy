@@ -63,7 +63,6 @@ class BasePlugin:
         self.zones_fetched = False
         self.thermostats_fetched = False
         self.sse_buffer = ""  # Buffer for accumulating SSE data
-        return
     
     def onStart(self):
         """Domoticz calls this when the plugin is started"""
@@ -85,8 +84,9 @@ class BasePlugin:
         # Set heartbeat to 30 seconds (reduced from 10)
         Domoticz.Heartbeat(30)
         
-        # Start initial connection
-        self.fetchZonesAndConnect()
+        # Don't start connection immediately - wait for first heartbeat
+        # This ensures Domoticz completes initialization first
+        Domoticz.Log("Will connect to API on first heartbeat...")
     
     def onStop(self):
         """Domoticz calls this when the plugin is stopped"""
@@ -353,7 +353,7 @@ class BasePlugin:
                             # Zone leaders are already represented by the main zone device
                             if not is_zone_leader:
                                 Domoticz.Log(f"Creating sensor for non-leader thermostat: {zone_name} ({serial_number[-4:]})")
-                                # Use high unit numbers: 60000 + device_id
+                                # Use unit numbers 201-255 (255 - device_id): zone devices use 1-200 (40 zones × 5 units)
                                 self.updateThermostatDevice(device_id, zone_name, serial_number, state)
                             else:
                                 Domoticz.Debug(f"Skipping zone leader: {zone_name} ({serial_number[-4:]})")
@@ -459,10 +459,8 @@ class BasePlugin:
                 Domoticz.Log("Reconnecting to SSE stream...")
                 self.fetchZonesAndConnect()
         
-        # Poll thermostats every 2 minutes (4 heartbeats with 30s interval) to update individual sensors
-        if self.thermostats_fetched and self.heartbeat_counter % 4 == 0:
-            Domoticz.Debug("Polling thermostats for non-leader device updates...")
-            self.pollThermostats()
+        # No need to poll - the SSE connection with types=zone,device and refresh_interval=300
+        # provides both real-time events and periodic refresh updates for all devices
         
         # Send keepalive debug message every 10 heartbeats (5 minutes with 30s interval)
         if self.sse_connection and self.heartbeat_counter % 10 == 0:
@@ -561,6 +559,11 @@ class BasePlugin:
                 else:
                     Domoticz.Debug(f"Zone update: {zone_name} (ID: {zone_id})")
                 
+                # Skip if zones haven't been fetched yet
+                if not self.zones_fetched:
+                    Domoticz.Debug(f"Skipping zone event - zones not yet fetched")
+                    return
+                
                 # Create or update device for this zone
                 self.updateZoneDevice(zone_id, zone_name, state)
             
@@ -572,6 +575,11 @@ class BasePlugin:
                 
                 Domoticz.Debug(f"Device update: device_id={device_id}, zone={zone_name}, serial={serial}")
                 
+                # Skip if thermostats haven't been fetched yet
+                if not self.thermostats_fetched:
+                    Domoticz.Debug(f"Skipping device event - thermostats not yet fetched")
+                    return
+                
                 # Update individual thermostat sensor (non-leader devices only)
                 if device_id and device_id in self.thermostats_cache:
                     cached_info = self.thermostats_cache[device_id]
@@ -581,6 +589,8 @@ class BasePlugin:
                         self.updateThermostatDevice(device_id, zone_name, serial, state)
                     else:
                         Domoticz.Debug(f"Skipping device event for zone leader: device_id={device_id}")
+                else:
+                    Domoticz.Debug(f"Device {device_id} not found in thermostats cache")
         
         except Exception as e:
             Domoticz.Error(f"Error handling event: {e}")
@@ -589,9 +599,14 @@ class BasePlugin:
         """Create or update Domoticz devices for a zone"""
         Domoticz.Debug(f"updateZoneDevice: {zone_name}")
         
+        # Safety check - don't create/update devices if we don't have valid state
+        if not state:
+            Domoticz.Debug(f"Skipping updateZoneDevice for {zone_name} - no state data")
+            return
+        
         try:
             # Calculate unit numbers based on zone_id ((zone_id-1) * 5 + offset)
-            # Zone 1 gets units 1-5, Zone 2 gets units 6-10, etc.
+            # Supports up to 40 zones: Zone 1 gets units 1-5, Zone 2 gets units 6-10, ..., Zone 40 gets units 196-200
             base_unit = (zone_id - 1) * 5
             temp_unit = base_unit + 1      # Temperature sensor (WTGR800)
             setpoint_unit = base_unit + 2   # Thermostat setpoint
@@ -657,6 +672,15 @@ class BasePlugin:
             cur_heating = state.get('cur_heating', 0)
             battery_low = state.get('battery_low', False)
             
+            # Skip update if critical values are missing
+            if cur_temp is None:
+                Domoticz.Debug(f"Skipping update for {zone_name} - no temperature data")
+                return
+            
+            # Ensure humidity is valid
+            if humidity is None or humidity < 0 or humidity > 100:
+                humidity = 50
+            
             # Determine battery level (255 = normal, <20 = low)
             battery_level = 20 if battery_low else 255
             
@@ -717,9 +741,16 @@ class BasePlugin:
         """Create or update Domoticz temp+hum sensor for individual thermostats (non-leaders)"""
         Domoticz.Debug(f"updateThermostatDevice: device_id={device_id}, zone={zone_name}, serial={serial_number}")
         
+        # Safety check - don't create/update devices if we don't have valid state
+        if not state:
+            Domoticz.Debug(f"Skipping updateThermostatDevice for device {device_id} - no state data")
+            return
+        
         try:
-            # Use high unit numbers: 60000 + device_id to avoid conflicts with zone devices
-            unit = 60000 + device_id
+            # Use unit numbers counting down from 255 to avoid conflicts with zone devices (1-200)
+            # Supports 40 zones (1-200) + up to 55 non-leader thermostats (201-255)
+            # device_id 0 gets unit 255, device_id 1 gets 254, etc.
+            unit = 255 - device_id
             
             # Create temperature + humidity device if needed
             if unit not in Devices:
@@ -738,6 +769,15 @@ class BasePlugin:
             cur_temp = state.get('cur_temp_c')
             humidity = state.get('hum_perc', 50)
             battery_low = state.get('battery_low', False)
+            
+            # Skip update if critical values are missing
+            if cur_temp is None:
+                Domoticz.Debug(f"Skipping update for device {device_id} - no temperature data")
+                return
+            
+            # Ensure humidity is valid
+            if humidity is None or humidity < 0 or humidity > 100:
+                humidity = 50
             
             # Determine battery level (255 = normal, <20 = low)
             battery_level = 20 if battery_low else 255

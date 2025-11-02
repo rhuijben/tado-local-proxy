@@ -68,9 +68,16 @@ This performs:
 2. **Cloud API authentication** - Opens browser for OAuth login to fetch device metadata (battery status, zone names, etc.)
 3. Starts the API server on port 4407
 
-**Note**: The cloud authentication is a one-time setup. Visit the displayed URL in your browser, log in with your Tado credentials, and the proxy will automatically complete the setup.
+**Monitoring Cloud Authentication:**
 
-Check the console output or `http://localhost:4407/status` for the authentication URL if needed.
+After starting the proxy:
+1. Open your browser to **`http://localhost:4407`** - the web UI
+2. Check the **Cloud** status indicator in the status bar
+3. If authentication is needed, click the "Authenticate" link displayed
+4. Log in with your Tado credentials in the browser
+5. The proxy automatically completes setup - no need to watch console logs!
+
+**Note**: Cloud authentication is one-time setup. The web UI makes this much easier to monitor than watching console output.
 
 ### Subsequent Runs
 
