@@ -331,18 +331,32 @@
             padding: 30px 20px;
             margin-top: 40px;
             border-top: 1px solid #e0e0e0;
+            color: #999;
+            font-size: 13px;
         }
 
         .footer a {
             color: #999;
             text-decoration: none;
-            font-size: 13px;
             margin: 0 15px;
             transition: color 0.2s;
         }
 
         .footer a:hover {
             color: #666;
+        }
+
+        .footer .version-info {
+            margin-top: 10px;
+            font-size: 12px;
+        }
+
+        .footer .version-info a {
+            color: #ff7b2e;
+        }
+
+        .footer .version-info a:hover {
+            color: #ff6b1e;
         }
     </style>
 </head>
@@ -369,8 +383,13 @@
         </div>
 
         <div class="footer">
-            <a href="/api">API Details</a>
-            <a href="/docs">API Docs</a>
+            <div>
+                <a href="/api">API Details</a>
+                <a href="/docs">API Docs</a>
+            </div>
+            <div class="version-info">
+                Powered by <a href="https://github.com/ampscm/TadoLocal" target="_blank" rel="noopener">Tado Local</a> <span id="version-number">...</span>
+            </div>
         </div>
     </div>
 
@@ -443,6 +462,11 @@
                 if (!response.ok) return;
                 
                 const data = await response.json();
+                
+                // Update version in footer
+                if (data.version) {
+                    document.getElementById('version-number').textContent = data.version;
+                }
                 
                 // Update cloud status
                 const cloudStatusEl = document.getElementById('cloud-status');

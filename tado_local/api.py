@@ -14,7 +14,7 @@
 # limitations under the License.
 #
 
-"""Tado Local API - Main API class for managing HomeKit connections and device state."""
+"""Tado Local - Main API class for managing HomeKit connections and device state."""
 
 import asyncio
 import json
@@ -35,7 +35,7 @@ logger = logging.getLogger('tado-local')
 
 
 class TadoLocalAPI:
-    """Tado Local API that leverages HomeKit for real-time data without cloud dependency."""
+    """Tado Local that leverages HomeKit for real-time data without cloud dependency."""
     accessories_cache : List[Any]
     accessories_dict : Dict[str, Any]
     accessories_id : Dict[int, str]
@@ -70,7 +70,7 @@ class TadoLocalAPI:
         await self.initialize_device_states()
         self.is_initializing = False  # Re-enable change logging
         await self.setup_event_listeners()
-        logger.info("Tado Local API initialized successfully")
+        logger.info("Tado Local initialized successfully")
     
     async def cleanup(self):
         """Clean up resources and unsubscribe from events."""

@@ -1,15 +1,27 @@
 """
-Tado Local Proxy Plugin for Domoticz
-Connects to the Tado Local Proxy API and creates/updates thermostat devices for each zone.
+Tado Local Plugin for Domoticz
+Connects to Tado Local and creates/updates thermostat devices for each zone.
 """
 #
-# Author: Tado Local Proxy
+# Copyright 2025 TadoLocalProxy and AmpScm contributors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 #
 """
-<plugin key="TadoLocal" name="Tado Local Proxy" author="TadoLocal" version="1.0.0" wikilink="https://github.com/rhuijben/tado-local-proxy" externallink="https://github.com/rhuijben/tado-local-proxy">
+<plugin key="TadoLocal" name="Tado Local" author="TadoLocal" version="1.0.0-alpha1" wikilink="https://github.com/ampscm/TadoLocal" externallink="https://github.com/ampscm/TadoLocal">
     <description>
-        <h2>Tado Local Proxy Plugin</h2><br/>
-        Connects to Tado Local Proxy API to monitor and control heating zones.<br/>
+        <h2>Tado Local Plugin</h2><br/>
+        Connects to Tado Local to monitor and control heating zones.<br/>
         <br/>
         <h3>Features</h3>
         <ul style="list-style-type:square">
@@ -45,7 +57,7 @@ import time
 from typing import Dict, Any, Optional
 
 class BasePlugin:
-    """Tado Local Proxy plugin for Domoticz"""
+    """Tado Local plugin for Domoticz"""
     
     def __init__(self):
         self.api_url = ""
@@ -77,7 +89,7 @@ class BasePlugin:
         if Parameters["Mode6"] == "Debug":
             Domoticz.Debugging(1)
         
-        Domoticz.Log(f"Tado Local Proxy Plugin started - API: {self.api_url}")
+        Domoticz.Log(f"Tado Local Plugin started - API: {self.api_url}")
         Domoticz.Log(f"Retry interval: {self.retry_interval} seconds")
         Domoticz.Log(f"Auto-enable devices: {'Yes' if self.auto_enable_devices else 'No'}")
         
@@ -136,7 +148,7 @@ class BasePlugin:
                 pass
             self.zones_fetch_connection = None
         
-        Domoticz.Log("Tado Local Proxy Plugin stopped")
+        Domoticz.Log("Tado Local Plugin stopped")
     
     def onConnect(self, Connection, Status, Description):
         """Domoticz calls this when a connection is made"""

@@ -56,7 +56,7 @@ pip install .
 
 ```bash
 # Once pushed to GitHub
-pip install git+https://github.com/yourusername/tado-local-proxy.git
+pip install git+https://github.com/ampscm/TadoLocal.git
 ```
 
 ## Usage

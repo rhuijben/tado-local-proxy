@@ -14,7 +14,7 @@
 # limitations under the License.
 #
 
-"""FastAPI route handlers for Tado Local API."""
+"""FastAPI route handlers for Tado Local."""
 
 import asyncio
 import json
@@ -28,6 +28,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+from .__version__ import __version__
 from .homekit_uuids import enhance_accessory_data, get_service_name, get_characteristic_name
 from .state import DeviceStateManager
 
@@ -38,9 +39,9 @@ logger = logging.getLogger('tado-local')
 def create_app():
     """Create and configure the FastAPI application."""
     app = FastAPI(
-        title="Tado Local API",
+        title="Tado Local",
         description="Local REST API for Tado devices via HomeKit bridge",
-        version="1.0.0"
+        version=__version__
     )
     
     # Mount static files
@@ -70,9 +71,9 @@ def register_routes(app: FastAPI, get_tado_api):
         else:
             # Fallback to API info if web UI not found
             return {
-                "service": "Tado Local API",
+                "service": "Tado Local",
                 "description": "Local REST API for Tado devices via HomeKit bridge",
-                "version": "1.0.0",
+                "version": __version__,
                 "documentation": "/docs",
                 "api_info": "/api",
                 "note": "Web UI not found. Install static/index.html or visit /api for API details"
@@ -82,9 +83,9 @@ def register_routes(app: FastAPI, get_tado_api):
     async def api_info():
         """API root with diagnostics and navigation."""
         return {
-            "service": "Tado Local API",
+            "service": "Tado Local",
             "description": "Local REST API for Tado devices via HomeKit bridge",
-            "version": "1.0.0",
+            "version": __version__,
             "documentation": "/docs",
             "web_ui": "/",
             "endpoints": {
@@ -115,6 +116,7 @@ def register_routes(app: FastAPI, get_tado_api):
             
             status = {
                 "status": "connected",
+                "version": __version__,
                 "bridge_connected": True,
                 "last_update": tado_api.last_update,
                 "cached_accessories": len(tado_api.accessories_cache),
@@ -1196,13 +1198,41 @@ def register_routes(app: FastAPI, get_tado_api):
                                 conn.close()
                                 
                                 for zone_id, zone_name in zones:
-                                    zone_state = tado_api.state_manager.get_zone_state(zone_id)
+                                    # Get zone info
+                                    zone_info = tado_api.state_manager.zone_cache.get(zone_id)
+                                    if not zone_info:
+                                        continue
+                                    
+                                    leader_device_id = zone_info['leader_device_id']
+                                    
+                                    # Get zone state from leader or first device
+                                    zone_state = None
+                                    if leader_device_id:
+                                        zone_state = tado_api.state_manager.get_current_state(leader_device_id)
+                                    
+                                    # If no leader state, try first device in zone
+                                    if not zone_state:
+                                        for dev_id, dev_info in tado_api.state_manager.device_info_cache.items():
+                                            if dev_info.get('zone_id') == zone_id:
+                                                zone_state = tado_api.state_manager.get_current_state(dev_id)
+                                                break
+                                    
                                     if zone_state:
+                                        # Build simplified state for SSE
+                                        state = {
+                                            'cur_temp_c': zone_state.get('current_temperature'),
+                                            'hum_perc': zone_state.get('humidity'),
+                                            'target_temp_c': zone_state.get('target_temperature'),
+                                            'mode': zone_state.get('target_heating_cooling_state', 0),
+                                            'cur_heating': zone_state.get('current_heating_cooling_state', 0),
+                                            'battery_low': zone_state.get('battery_low', False)
+                                        }
+                                        
                                         event_obj = {
                                             'type': 'zone',
                                             'zone_id': zone_id,
                                             'zone_name': zone_name,
-                                            'state': zone_state,
+                                            'state': state,
                                             'timestamp': time.time(),
                                             'refresh': True
                                         }

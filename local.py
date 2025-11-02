@@ -17,7 +17,7 @@
 #
 
 """
-Tado Local API - Backward compatibility entry point.
+Tado Local - Backward compatibility entry point.
 
 This file provides backward compatibility for existing deployments.
 New deployments should use:

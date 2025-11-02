@@ -27,8 +27,8 @@ This proxy provides a lightweight, direct solution using the HomeKit protocol wi
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/tado-local-proxy.git
-cd tado-local-proxy
+git clone https://github.com/ampscm/TadoLocal.git
+cd TadoLocal
 
 # Install the package
 pip install -e .
@@ -298,7 +298,7 @@ SQLite database stores:
 ### Project Structure
 
 ```
-tado-local-proxy/
+tado_local/
 ├── local.py             # Backward compatibility entry point
 ├── homekit_uuids.py     # HomeKit UUID to name mappings (legacy)
 ├── requirements.txt     # Python dependencies
@@ -369,14 +369,16 @@ Contributions welcome! The project is actively developed.
 ### Development Setup
 
 ```bash
-git clone https://github.com/yourusername/tado-local-proxy.git
-cd tado-local-proxy
+git clone https://github.com/ampscm/TadoLocal.git
+cd TadoLocal
 pip install -e .[dev]  # Development dependencies
 ```
 
 ## License
 
-MIT License - see LICENSE file for details.
+Apache License 2.0 - see LICENSE file for details.
+
+This project is compatible with all smart home products requiring cloud rate limit solutions for Tado devices.
 
 ## Acknowledgments
 
@@ -386,8 +388,8 @@ MIT License - see LICENSE file for details.
 
 ## Support & Community
 
-- **Issues**: [GitHub Issues](https://github.com/yourusername/tado-local-proxy/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/tado-local-proxy/discussions)
+- **Issues**: [GitHub Issues](https://github.com/ampscm/TadoLocal/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/ampscm/TadoLocal/discussions)
 - **Documentation**: Visit `/docs` endpoint when proxy is running
 
 ## Status

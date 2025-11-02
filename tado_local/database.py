@@ -14,7 +14,7 @@
 # limitations under the License.
 #
 
-"""Database schema for Tado Local API."""
+"""Database schema for Tado Local."""
 
 DB_SCHEMA = """
 CREATE TABLE IF NOT EXISTS pairings (

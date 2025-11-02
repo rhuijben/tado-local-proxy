@@ -14,7 +14,7 @@
 # limitations under the License.
 #
 
-"""Command-line interface for Tado Local API."""
+"""Command-line interface for Tado Local."""
 
 import asyncio
 import argparse
@@ -42,7 +42,7 @@ tado_api: Optional[TadoLocalAPI] = None
 server: Optional[uvicorn.Server] = None
 
 async def run_server(args):
-    """Run the Tado Local API server."""
+    """Run the Tado Local server."""
     global bridge_pairing, tado_api, server
     
     def handle_signal(sig, frame):
@@ -98,7 +98,7 @@ async def run_server(args):
         # Initialize the API with the pairing
         await tado_api.initialize(bridge_pairing)
         
-        logger.info(f"*** Tado Local API ready! ***")
+        logger.info(f"*** Tado Local ready! ***")
         logger.info(f"Bridge IP: {bridge_ip}")
         logger.info(f"API Server: http://0.0.0.0:{args.port}")
         logger.info(f"Documentation: http://0.0.0.0:{args.port}/docs")
@@ -120,7 +120,7 @@ async def run_server(args):
     except KeyboardInterrupt:
         logger.info("Keyboard interrupt received, shutting down gracefully...")
     except Exception as e:
-        logger.error(f"ERROR: Failed to start Tado Local API: {e}")
+        logger.error(f"ERROR: Failed to start Tado Local: {e}")
         raise
     finally:
         # Clean up resources
@@ -159,7 +159,7 @@ async def run_server(args):
 def main():
     """Main entry point for the CLI."""
     parser = argparse.ArgumentParser(
-        description="Tado Local API - REST API for Tado devices via HomeKit bridge",
+        description="Tado Local - REST API for Tado devices via HomeKit bridge",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

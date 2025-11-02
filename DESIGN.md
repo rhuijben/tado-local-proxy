@@ -1,8 +1,8 @@
-# Tado Local Proxy - Design Document
+# Tado Local - Design Document
 
 ## Overview
 
-Tado Local Proxy is a Python-based REST API server that provides local control of Tado smart heating devices via the HomeKit protocol. It bypasses Tado's cloud API rate limits by communicating directly with the Tado Internet Bridge using HomeKit over IP.
+Tado Local is a Python-based REST API server that provides local control of Tado smart heating devices via the HomeKit protocol. It bypasses Tado's cloud API rate limits by communicating directly with the Tado Internet Bridge using HomeKit over IP.
 
 ### Key Design Goals
 
@@ -67,7 +67,7 @@ tado-local/
                  │ HTTP REST / SSE
                  ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                   Tado Local Proxy                          │
+│                   Tado Local                                │
 │                                                              │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
 │  │   FastAPI    │  │  TadoLocalAPI │  │    State     │     │
@@ -1289,7 +1289,7 @@ python -m tado_local --state /opt/tado/data.db
 **systemd (Linux)**:
 ```ini
 [Unit]
-Description=Tado Local Proxy
+Description=Tado Local
 After=network.target
 
 [Service]
@@ -1563,4 +1563,4 @@ Apache License 2.0 - See LICENSE file
 
 **Document Version**: 1.0  
 **Last Updated**: November 1, 2025  
-**Maintainer**: Tado Local Proxy Team
+**Maintainer**: Tado Local Team

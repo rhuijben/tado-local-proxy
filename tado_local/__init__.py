@@ -13,10 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-"""Tado Local API - REST API for Tado devices via HomeKit bridge."""
+"""Tado Local - REST API for Tado devices via HomeKit bridge."""
 
-__version__ = "1.0.0"
-__author__ = "Tado Local API Contributors"
+from .__version__ import __version__
+
+__author__ = "Tado Local Contributors"
 __description__ = "REST API for Tado devices via HomeKit bridge"
 
 # Import modules that are ready
