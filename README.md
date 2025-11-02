@@ -205,7 +205,7 @@ climate:
     # Configure with REST commands
 ```
 
-**Note**: A native Home Assistant integration is on our roadmap!
+**Contributions welcome!** If you'd like to build a native Home Assistant integration or HACS addon, we'd be happy to review PRs.
 
 ### Other Platforms
 
@@ -224,8 +224,15 @@ The REST API works with any platform that supports HTTP requests:
 ### Prerequisites
 
 - **Python 3.11 or newer** ([Download](https://www.python.org/downloads/))
+  - Required for modern async/await syntax and performance improvements
+  
 - **Tado Internet Bridge** with HomeKit support (V3+ models)
+  - Must have HomeKit functionality (look for the HomeKit logo on the device)
+  - Check the label on your bridge for the HomeKit PIN (format: XXX-XX-XXX)
+  
 - **Network access** to your Tado bridge
+  - Bridge and the computer running Tado Local must be on the same network
+  - You'll need to know the bridge's IP address (check your router's device list)
 
 ### Installation Steps
 
@@ -442,8 +449,13 @@ tado-local --bridge-ip 192.168.1.100 --pin 123-45-678
 - [ ] **Web UI enhancements** - Additional controls, better mobile support
 - [ ] **Test coverage** - Unit and integration tests
 - [ ] **Multi-bridge support** - Handle multiple Tado systems
-- [ ] **HomeKit bridge** - Expose Tado Local as a HomeKit accessory (workaround for single connection limit)
 - [ ] **Documentation improvements** - More examples, tutorials, video guides
+
+**Future exploration areas**:
+
+- [ ] **Google Local Home API** - Expose devices to Google Home/Assistant without cloud
+- [ ] **HomeKit bridge re-exposure** - Allow multiple HomeKit connections by bridging through Tado Local
+- [ ] **Platform stability testing** - Currently tested on Windows, FreeBSD, and Linux - expand testing and CI/CD
 
 ### Development Setup
 
@@ -532,9 +544,42 @@ tado_local/
 
 ## 📄 License
 
-Apache License 2.0 - see [LICENSE](LICENSE) file for details.
+**Apache License 2.0** - see [LICENSE](LICENSE) file for full text.
 
-Free for personal and commercial use. Attribution appreciated but not required.
+### What This Means
+
+This project is **free and open source** software. You can:
+- ✅ Use it for personal or commercial purposes
+- ✅ Modify and distribute it
+- ✅ Include it in proprietary software
+- ✅ Use it in any context without restrictions
+
+**No attribution required** (but appreciated!)
+
+### Dependencies
+
+All dependencies are licensed under permissive open source licenses compatible with Apache 2.0:
+
+| Dependency | License | Purpose |
+|------------|---------|---------|
+| **aiohomekit** | Apache-2.0 | HomeKit protocol implementation |
+| **fastapi** | MIT | REST API framework |
+| **uvicorn** | BSD-3-Clause | ASGI web server |
+| **cryptography** | Apache-2.0 OR BSD-3-Clause | Cryptographic operations |
+| **zeroconf** | LGPL-2.1-or-later | mDNS service discovery (optional) |
+| **aiohttp** | Apache-2.0 AND MIT | HTTP client for cloud API |
+
+**All licenses are permissive** and allow use in any context, including commercial and proprietary software. The LGPL-2.1 license on zeroconf permits linking without requiring your code to be open source.
+
+### Reusability
+
+This codebase is designed to be:
+- **Embeddable** in other projects
+- **Forkable** for custom modifications
+- **Integratable** into commercial products
+- **Redistributable** under the same or compatible license terms
+
+Feel free to use this code as a foundation for your own projects, integrate it into smart home platforms, or build commercial products around it.
 
 ---
 
@@ -567,13 +612,20 @@ Free for personal and commercial use. Attribution appreciated but not required.
 - SQLite persistence and history
 - Auto-reconnection
 - Hybrid local + cloud architecture
+- **Cross-platform**: Tested on Windows, FreeBSD, and Linux
 
-🚧 **Coming Soon**:
-- Docker container
-- Home Assistant HACS integration
-- Improved mobile web UI
-- Advanced scheduling features
-- Multi-bridge support
+🚧 **Near-term priorities**:
+- Docker container and docker-compose
+- Home Assistant integration examples
+- Improved web UI mobile support
+- Comprehensive test coverage
+- CI/CD pipeline for multi-platform testing
+
+🔮 **Future exploration**:
+- **Google Local Home API integration** - Enable local control through Google Home/Assistant without cloud round-trips
+- **HomeKit bridge re-exposure** - Work around single-connection limit by exposing Tado Local itself as a HomeKit bridge
+- **Matter protocol support** - As the standard matures, provide Matter compatibility
+- **Advanced automation** - Built-in scheduling, presence detection, and smart rules
 
 ---
 
