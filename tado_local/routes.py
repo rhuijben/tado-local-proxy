@@ -823,9 +823,15 @@ def register_routes(app: FastAPI, get_tado_api):
             raise HTTPException(status_code=500, detail=f"Failed to set temperature: {e}")
 
     @app.get("/events", tags=["Events"])
-    async def get_events():
+    async def get_events(refresh_interval: Optional[int] = None):
         """
         Server-Sent Events (SSE) endpoint for real-time updates.
+        
+        Args:
+            refresh_interval: Optional interval in seconds to send periodic refresh updates
+                            even when state hasn't changed. Useful for clients like Domoticz
+                            that need regular updates for statistics and "last seen" tracking.
+                            Recommended: 300 (5 minutes). Default: None (only send on changes).
         
         Clients can maintain a persistent connection to receive live updates without polling.
         
@@ -901,17 +907,66 @@ def register_routes(app: FastAPI, get_tado_api):
             client_queue = asyncio.Queue()
             tado_api.event_listeners.append(client_queue)
             
+            last_refresh = time.time() if refresh_interval else None
+            
             try:
                 while True:
+                    # Calculate timeout based on refresh_interval
+                    if refresh_interval and last_refresh:
+                        time_since_refresh = time.time() - last_refresh
+                        timeout = max(1, refresh_interval - time_since_refresh)
+                    else:
+                        timeout = 30
+                    
                     # Wait for events
                     try:
-                        event_data = await asyncio.wait_for(client_queue.get(), timeout=30)
+                        event_data = await asyncio.wait_for(client_queue.get(), timeout=timeout)
+                        
+                        # Check for shutdown signal
+                        if event_data is None:
+                            logger.debug("SSE stream received shutdown signal")
+                            break
+                        
                         yield event_data
+                        
+                        # Reset refresh timer on any event
+                        if refresh_interval:
+                            last_refresh = time.time()
+                            
                     except asyncio.TimeoutError:
-                        # Send keepalive
-                        yield f"data: {json.dumps({'type': 'keepalive', 'timestamp': time.time()})}\n\n"
+                        # Check if we should send a refresh update
+                        if refresh_interval and last_refresh and (time.time() - last_refresh >= refresh_interval):
+                            # Send refresh updates for all zones
+                            conn = sqlite3.connect(tado_api.state_manager.db_path)
+                            cursor = conn.execute("""
+                                SELECT zone_id, name 
+                                FROM zones 
+                                WHERE zone_id IS NOT NULL
+                                ORDER BY zone_id
+                            """)
+                            zones = cursor.fetchall()
+                            conn.close()
+                            
+                            for zone_id, zone_name in zones:
+                                zone_state = tado_api.state_manager.get_zone_state(zone_id)
+                                if zone_state:
+                                    refresh_event = f"data: {json.dumps({
+                                        'type': 'zone',
+                                        'zone_id': zone_id,
+                                        'zone_name': zone_name,
+                                        'state': zone_state,
+                                        'timestamp': time.time(),
+                                        'refresh': True  # Mark as refresh update
+                                    })}\n\n"
+                                    yield refresh_event
+                            
+                            last_refresh = time.time()
+                        else:
+                            # Send keepalive
+                            yield f"data: {json.dumps({'type': 'keepalive', 'timestamp': time.time()})}\n\n"
                         
             except asyncio.CancelledError:
+                logger.debug("SSE stream cancelled")
                 pass
             finally:
                 # Remove this client's queue
@@ -929,9 +984,15 @@ def register_routes(app: FastAPI, get_tado_api):
         )
 
     @app.get("/events/zones", tags=["Events"])
-    async def get_zone_events():
+    async def get_zone_events(refresh_interval: Optional[int] = None):
         """
         Server-Sent Events (SSE) endpoint for zone-only updates.
+        
+        Args:
+            refresh_interval: Optional interval in seconds to send periodic refresh updates
+                            even when state hasn't changed. Useful for clients like Domoticz
+                            that need regular updates for statistics and "last seen" tracking.
+                            Recommended: 300 (5 minutes). Default: None (only send on changes).
         
         This endpoint only sends zone-level state changes, not individual device events.
         Useful for clients that only need zone aggregation without device details.
@@ -983,17 +1044,66 @@ def register_routes(app: FastAPI, get_tado_api):
             client_queue = asyncio.Queue()
             tado_api.zone_event_listeners.append(client_queue)
             
+            last_refresh = time.time() if refresh_interval else None
+            
             try:
                 while True:
+                    # Calculate timeout based on refresh_interval
+                    if refresh_interval and last_refresh:
+                        time_since_refresh = time.time() - last_refresh
+                        timeout = max(1, refresh_interval - time_since_refresh)
+                    else:
+                        timeout = 30
+                    
                     # Wait for events
                     try:
-                        event_data = await asyncio.wait_for(client_queue.get(), timeout=30)
+                        event_data = await asyncio.wait_for(client_queue.get(), timeout=timeout)
+                        
+                        # Check for shutdown signal
+                        if event_data is None:
+                            logger.debug("Zone SSE stream received shutdown signal")
+                            break
+                        
                         yield event_data
+                        
+                        # Reset refresh timer on any event
+                        if refresh_interval:
+                            last_refresh = time.time()
+                            
                     except asyncio.TimeoutError:
-                        # Send keepalive
-                        yield f"data: {json.dumps({'type': 'keepalive', 'timestamp': time.time()})}\n\n"
+                        # Check if we should send a refresh update
+                        if refresh_interval and last_refresh and (time.time() - last_refresh >= refresh_interval):
+                            # Send refresh updates for all zones
+                            conn = sqlite3.connect(tado_api.state_manager.db_path)
+                            cursor = conn.execute("""
+                                SELECT zone_id, name 
+                                FROM zones 
+                                WHERE zone_id IS NOT NULL
+                                ORDER BY zone_id
+                            """)
+                            zones = cursor.fetchall()
+                            conn.close()
+                            
+                            for zone_id, zone_name in zones:
+                                zone_state = tado_api.state_manager.get_zone_state(zone_id)
+                                if zone_state:
+                                    refresh_event = f"data: {json.dumps({
+                                        'type': 'zone',
+                                        'zone_id': zone_id,
+                                        'zone_name': zone_name,
+                                        'state': zone_state,
+                                        'timestamp': time.time(),
+                                        'refresh': True  # Mark as refresh update
+                                    })}\n\n"
+                                    yield refresh_event
+                            
+                            last_refresh = time.time()
+                        else:
+                            # Send keepalive
+                            yield f"data: {json.dumps({'type': 'keepalive', 'timestamp': time.time()})}\n\n"
                         
             except asyncio.CancelledError:
+                logger.debug("Zone SSE stream cancelled")
                 pass
             finally:
                 # Remove this client's queue

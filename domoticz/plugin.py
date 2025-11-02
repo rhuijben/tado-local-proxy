@@ -129,11 +129,12 @@ class BasePlugin:
             
             elif Connection == self.sse_connection:
                 # SSE connection established, send raw HTTP request
-                Domoticz.Debug("Sending SSE request for /events/zones")
+                Domoticz.Debug("Sending SSE request for /events/zones with 5-minute refresh")
                 
-                # Build raw HTTP GET request
+                # Build raw HTTP GET request with refresh_interval=300 (5 minutes)
+                # This ensures Domoticz gets periodic updates for statistics even when nothing changes
                 request = (
-                    "GET /events/zones HTTP/1.1\r\n"
+                    "GET /events/zones?refresh_interval=300 HTTP/1.1\r\n"
                     f"Host: {Connection.Address}:{Connection.Port}\r\n"
                     "User-Agent: Domoticz/1.0\r\n"
                     "Accept: text/event-stream\r\n"
@@ -183,7 +184,8 @@ class BasePlugin:
                         Domoticz.Log("Control request successful")
                 # Clean up and disconnect
                 del self.control_connections[Connection]
-                Connection.Disconnect()
+                # Don't explicitly disconnect - let Domoticz handle cleanup
+                # The Connection: close header should close it automatically
                 return
             
             # Handle raw SSE data (from raw TCP connection)
@@ -458,8 +460,12 @@ class BasePlugin:
                 zone_id = event_data.get('zone_id')
                 zone_name = event_data.get('zone_name')
                 state = event_data.get('state', {})
+                is_refresh = event_data.get('refresh', False)
                 
-                Domoticz.Debug(f"Zone update: {zone_name} (ID: {zone_id})")
+                if is_refresh:
+                    Domoticz.Debug(f"Zone refresh update: {zone_name} (ID: {zone_id})")
+                else:
+                    Domoticz.Debug(f"Zone update: {zone_name} (ID: {zone_id})")
                 
                 # Create or update device for this zone
                 self.updateZoneDevice(zone_id, zone_name, state)
@@ -631,7 +637,8 @@ class BasePlugin:
                 'Verb': 'POST',
                 'URL': f'/zones/{zone_id}/control?{query_string}',
                 'Headers': {
-                    'Content-Length': '0'
+                    'Content-Length': '0',
+                    'Connection': 'close'  # Ask server to close connection after response
                 }
             }
             

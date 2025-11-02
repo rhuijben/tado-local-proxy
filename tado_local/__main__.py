@@ -20,6 +20,7 @@ import asyncio
 import argparse
 import logging
 import os
+import signal
 from pathlib import Path
 from typing import Optional
 
@@ -38,10 +39,21 @@ logger = logging.getLogger('tado-local')
 # Global variables
 bridge_pairing: Optional[IpPairing] = None
 tado_api: Optional[TadoLocalAPI] = None
+server: Optional[uvicorn.Server] = None
 
 async def run_server(args):
     """Run the Tado Local API server."""
-    global bridge_pairing, tado_api
+    global bridge_pairing, tado_api, server
+    
+    def handle_signal(sig, frame):
+        """Handle shutdown signals gracefully."""
+        logger.info(f"Received signal {sig}, initiating shutdown...")
+        if server:
+            server.should_exit = True
+    
+    # Register signal handlers
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
     
     try:
         # Initialize database and pairing
@@ -115,11 +127,33 @@ async def run_server(args):
         if tado_api:
             logger.info("Performing cleanup...")
             
+            # First close all SSE event streams
+            logger.info("Closing SSE event streams...")
+            if tado_api.event_listeners:
+                logger.info(f"Closing {len(tado_api.event_listeners)} event listener queues")
+                for queue in tado_api.event_listeners[:]:  # Copy list to avoid modification during iteration
+                    try:
+                        await queue.put(None)  # Signal end of stream
+                    except:
+                        pass
+            
+            if tado_api.zone_event_listeners:
+                logger.info(f"Closing {len(tado_api.zone_event_listeners)} zone event listener queues")
+                for queue in tado_api.zone_event_listeners[:]:
+                    try:
+                        await queue.put(None)  # Signal end of stream
+                    except:
+                        pass
+            
+            # Give clients a moment to receive the close signal
+            await asyncio.sleep(0.5)
+            
             # Stop cloud API background sync if running
             if hasattr(tado_api, 'cloud_api') and tado_api.cloud_api:
                 logger.info("Stopping Tado Cloud API background tasks...")
                 await tado_api.cloud_api.stop_background_sync()
             
+            # Full cleanup
             await tado_api.cleanup()
 
 def main():
