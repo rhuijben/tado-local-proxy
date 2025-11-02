@@ -81,6 +81,34 @@ class BasePlugin:
         Domoticz.Log(f"Retry interval: {self.retry_interval} seconds")
         Domoticz.Log(f"Auto-enable devices: {'Yes' if self.auto_enable_devices else 'No'}")
         
+        # Clean up any devices with invalid unit numbers (> 255 or corrupt data)
+        # This fixes devices created with old buggy unit number logic
+        devices_to_delete = []
+        for unit in Devices:
+            try:
+                device = Devices[unit]
+                # Check if unit number is valid
+                if unit > 255:
+                    Domoticz.Log(f"Found device with invalid unit {unit}: {device.Name} - marking for deletion")
+                    devices_to_delete.append(unit)
+                # Try to access device properties to detect corruption
+                _ = device.sValue
+                _ = device.nValue
+            except Exception as e:
+                Domoticz.Error(f"Device {unit} is corrupted: {e} - marking for deletion")
+                devices_to_delete.append(unit)
+        
+        # Delete problematic devices
+        for unit in devices_to_delete:
+            try:
+                Domoticz.Log(f"Deleting corrupted/invalid device: Unit {unit}")
+                Devices[unit].Delete()
+            except Exception as e:
+                Domoticz.Error(f"Failed to delete device {unit}: {e}")
+        
+        if devices_to_delete:
+            Domoticz.Log(f"Cleaned up {len(devices_to_delete)} invalid devices")
+        
         # Set heartbeat to 30 seconds (reduced from 10)
         Domoticz.Heartbeat(30)
         
