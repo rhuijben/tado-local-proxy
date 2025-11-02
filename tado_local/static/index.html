@@ -596,7 +596,8 @@
                 // Transform data for step chart (changes only!)
                 const tempData = [];
                 const targetTempData = [];
-                const heatingData = [];
+                const heatingActiveData = [];
+                const humidityData = [];
                 const labels = [];
                 
                 // Reverse to get chronological order (API returns DESC)
@@ -608,8 +609,23 @@
                     
                     labels.push(timestamp);
                     tempData.push(state.cur_temp_c);
-                    targetTempData.push(state.target_temp_c);
-                    heatingData.push(state.cur_heating === 1 ? state.cur_temp_c : null); // Show temp when heating
+                    
+                    // Only show target temp when mode != 0 (heating/cooling enabled)
+                    if (state.mode !== 0 && state.mode !== '0') {
+                        targetTempData.push(state.target_temp_c);
+                    } else {
+                        targetTempData.push(null);
+                    }
+                    
+                    // Track when heating is active (for background shading)
+                    if (state.cur_heating === 1 || state.cur_heating === 2) {
+                        heatingActiveData.push(1);  // Any value for shading
+                    } else {
+                        heatingActiveData.push(null);
+                    }
+                    
+                    // Add humidity if available (note: field name is hum_perc, not cur_humidity_pct)
+                    humidityData.push(state.hum_perc !== undefined && state.hum_perc !== null ? state.hum_perc : null);
                 }
                 
                 // Destroy existing chart if any
@@ -629,35 +645,54 @@
                         labels: labels,
                         datasets: [
                             {
+                                label: 'Heating Active (background)',
+                                data: heatingActiveData,
+                                backgroundColor: 'rgba(255, 87, 34, 0.15)',
+                                borderColor: 'transparent',
+                                stepped: 'before',
+                                borderWidth: 0,
+                                pointRadius: 0,
+                                fill: 'origin',
+                                yAxisID: 'y2',
+                                order: 10  // Draw first (behind everything)
+                            },
+                            {
                                 label: 'Current Temp',
                                 data: tempData,
                                 borderColor: '#2196F3',
                                 backgroundColor: 'rgba(33, 150, 243, 0.1)',
-                                stepped: 'before', // STEP CHART - holds value until next change
+                                stepped: 'before',
                                 borderWidth: 2,
                                 pointRadius: 0,
-                                fill: false
+                                fill: false,
+                                yAxisID: 'y',
+                                order: 2
                             },
                             {
                                 label: 'Target Temp',
                                 data: targetTempData,
                                 borderColor: '#FF7B2E',
                                 backgroundColor: 'rgba(255, 123, 46, 0.1)',
-                                stepped: 'before', // STEP CHART - holds value until next change
+                                stepped: 'before',
                                 borderWidth: 2,
                                 borderDash: [5, 5],
                                 pointRadius: 0,
-                                fill: false
+                                fill: false,
+                                yAxisID: 'y',
+                                spanGaps: false,
+                                order: 1
                             },
                             {
-                                label: 'Heating Active',
-                                data: heatingData,
-                                borderColor: '#F44336',
-                                backgroundColor: 'rgba(244, 67, 54, 0.2)',
-                                stepped: 'before', // STEP CHART
-                                borderWidth: 3,
+                                label: 'Humidity',
+                                data: humidityData,
+                                borderColor: '#4CAF50',
+                                backgroundColor: 'rgba(76, 175, 80, 0.1)',
+                                stepped: 'before',
+                                borderWidth: 2,
                                 pointRadius: 0,
-                                fill: '+1' // Fill between current temp and this line when heating
+                                fill: false,
+                                yAxisID: 'y1',
+                                order: 3
                             }
                         ]
                     },
@@ -671,17 +706,32 @@
                         plugins: {
                             legend: {
                                 display: true,
-                                position: 'bottom'
+                                position: 'bottom',
+                                labels: {
+                                    filter: function(item) {
+                                        // Hide the heating background from legend
+                                        return !item.text.includes('background');
+                                    }
+                                }
                             },
                             tooltip: {
                                 callbacks: {
                                     label: function(context) {
+                                        // Don't show tooltip for heating background
+                                        if (context.dataset.label && context.dataset.label.includes('background')) {
+                                            return null;
+                                        }
+                                        
                                         let label = context.dataset.label || '';
                                         if (label) {
                                             label += ': ';
                                         }
                                         if (context.parsed.y !== null) {
-                                            label += context.parsed.y.toFixed(1) + '°C';
+                                            if (context.dataset.yAxisID === 'y1') {
+                                                label += context.parsed.y.toFixed(1) + '%';
+                                            } else {
+                                                label += context.parsed.y.toFixed(1) + '°C';
+                                            }
                                         }
                                         return label;
                                     }
@@ -705,11 +755,37 @@
                                 }
                             },
                             y: {
+                                type: 'linear',
+                                display: true,
+                                position: 'left',
                                 title: {
                                     display: true,
                                     text: 'Temperature (°C)'
                                 },
                                 beginAtZero: false
+                            },
+                            y1: {
+                                type: 'linear',
+                                display: true,
+                                position: 'right',
+                                title: {
+                                    display: true,
+                                    text: 'Humidity (%)'
+                                },
+                                min: 0,
+                                max: 100,
+                                grid: {
+                                    drawOnChartArea: false
+                                }
+                            },
+                            y2: {
+                                type: 'linear',
+                                display: false,
+                                min: 0,
+                                max: 1,
+                                grid: {
+                                    drawOnChartArea: false
+                                }
                             }
                         }
                     }
