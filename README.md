@@ -1,29 +1,233 @@
 # Tado Local
 
-**Local REST API for Tado devices via HomeKit** - bypassing cloud rate limits with direct bridge communication.
+**Control your Tado smart thermostats locally** - No cloud dependencies, no rate limits, instant response times.
 
-## Why This Exists
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 
-With TADO rate limiting their cloud API (used by [libtado](https://github.com/germainlefebvre4/libtado)), we need an alternate reliable way to access TADO data locally. The recommended approach from Tado is using the HomeKit API, but this isn't easily accessible.
+## 🎯 What is Tado Local?
 
-Most solutions require setting up [Home Assistant](https://www.home-assistant.io/) and then bridging to your home automation system (like [Domoticz](http://domoticz.com)) via MQTT. That's **a lot of overhead** just for one appliance.
+Tado Local is a lightweight bridge that connects your Tado smart heating system directly to your home automation setup. It provides:
 
-This proxy provides a lightweight, direct solution using the HomeKit protocol with a clean REST API.
+- **🏠 Beautiful Web UI** - Control your zones with an intuitive interface
+- **📊 Visual History** - See temperature, humidity, and heating patterns over time
+- **⚡ REST API** - Integrate with any smart home platform (Domoticz, Home Assistant, openHAB, etc.)
+- **🔄 Real-time Updates** - Instant notifications when temperatures change
+- **💾 Local Storage** - All your data stays on your network
 
-## Features
+### Why Choose Local Control?
+
+Tado's cloud API has strict rate limits that can break home automation integrations. Traditional solutions require running full Home Assistant instances just to access one device. 
+
+**Tado Local changes that.** Using the HomeKit protocol built into your Tado bridge, this tool provides fast, reliable, local access with a simple REST API that works with any platform.
+
+---
+
+## 📸 See It In Action
+
+### Web Interface - Zone Overview
+![Zone Overview](docs/images/zone-overview.png)
+*Monitor all your rooms at a glance with real-time temperature, humidity, and status updates.*
+
+### Web Interface - Zone Control
+![Zone Control](docs/images/zone-control.png)
+*Adjust temperatures and switch between heating modes with a clean, responsive interface.*
+
+### Web Interface - Visual History
+![Visual History](docs/images/history-chart.png)
+*Track temperature trends, heating activity, and humidity levels over hours, days, or months with interactive charts.*
+
+---
+
+---
+
+## ⚠️ Alpha Status
+
+**This project is currently in active alpha development.** Core features are working and stable, but expect:
+- Occasional API changes as we refine the interface
+- Some rough edges in the UI
+- Ongoing improvements based on community feedback
+
+**We welcome testers!** Please report any issues you encounter on [GitHub Issues](https://github.com/ampscm/TadoLocal/issues).
+
+---
+
+## ✨ Features
 
 - **Local Control**: Direct communication with Tado bridge via HomeKit - no cloud required
+- **🎨 Web UI**: Beautiful, responsive interface for controlling your heating
+- **📈 Visual History**: Interactive charts showing temperature, humidity, and heating patterns
 - **Clean REST API**: Simple HTTP endpoints for easy integration
 - **Real-time Events**: Server-Sent Events (SSE) stream for live updates
 - **State History**: SQLite-backed storage with 10-second resolution
 - **Zone Management**: Organize devices by room/zone
 - **Automatic Reconnection**: Handles network interruptions gracefully
-- **Change Detection**: Only saves when values actually change
-- **Interactive Docs**: Built-in Swagger UI at `/docs`
+- **Interactive API Docs**: Built-in Swagger UI at `/docs`
 
-## Installation
+---
 
-### Quick Start (Recommended)
+## 🚀 Quick Start
+
+### For Casual Users
+
+**Step 1: Install Python**
+
+If you don't have Python 3.11 or newer, download it from [python.org](https://www.python.org/downloads/).
+
+**Step 2: Install Tado Local**
+
+```bash
+# Download the project
+git clone https://github.com/ampscm/TadoLocal.git
+cd TadoLocal
+
+# Install
+pip install -e .
+```
+
+**Step 3: Find Your Bridge Information**
+
+You'll need:
+- **Bridge IP Address**: Check your router's connected devices list for "Tado"
+- **HomeKit PIN**: Found on a sticker on your Tado bridge (format: XXX-XX-XXX)
+
+**Step 4: Start Tado Local**
+
+```bash
+# First time setup
+tado-local --bridge-ip 192.168.1.100 --pin 123-45-678
+```
+
+**Step 5: Complete Cloud Authentication**
+
+1. Open your browser to `http://localhost:4407`
+2. Check the **Cloud** status in the web interface
+3. If authentication is needed, click the "Authenticate" link
+4. Log in with your Tado account credentials
+5. Done! The interface will update automatically
+
+**Step 6: Use It!**
+
+- **Web Interface**: Visit `http://localhost:4407`
+- **API Documentation**: Visit `http://localhost:4407/docs`
+
+**Next Time**: Just run `tado-local` - no arguments needed!
+
+---
+
+## 🏗️ For Developers & Integrators
+
+### REST API Integration
+
+Tado Local provides a comprehensive REST API for integrating with any smart home platform.
+
+**Base URL**: `http://localhost:4407`
+
+**Key Endpoints**:
+
+```bash
+# Get all zones with current state
+GET /zones
+
+# Get all thermostats
+GET /thermostats
+
+# Get history for a zone (last 24 hours by default)
+GET /zones/{zone_id}/history?start_time={unix_timestamp}&limit=1000
+
+# Set target temperature
+POST /thermostats/{thermostat_id}/set_temperature
+Content-Type: application/json
+{"temperature": 21.5}
+
+# Real-time event stream
+GET /events
+```
+
+**Full API Documentation**: `http://localhost:4407/docs` (interactive Swagger UI)
+
+### Domoticz Plugin Installation
+
+**Good news - we have a native Domoticz plugin!** It's included in the `domoticz/` directory of this repository.
+
+#### Installation Steps:
+
+1. **Copy the plugin to Domoticz**:
+   ```bash
+   cd /path/to/domoticz/plugins
+   mkdir TadoLocal
+   cp /path/to/tado-local/domoticz/plugin.py TadoLocal/
+   ```
+
+2. **Restart Domoticz**:
+   ```bash
+   sudo systemctl restart domoticz
+   ```
+
+3. **Configure in Domoticz Web UI**:
+   - Navigate to: **Setup → Hardware**
+   - Click **Add** and select **Tado Local** from the Type dropdown
+   - Enter your Tado Local API URL (e.g., `http://localhost:4407`)
+   - Set retry interval (default: 30 seconds)
+   - Click **Add**
+
+4. **Devices auto-created!**
+   - The plugin automatically discovers all your zones
+   - Each zone appears as a Temperature + Humidity device
+   - Real-time updates via Server-Sent Events (SSE)
+
+#### Features:
+- ✅ Automatic zone discovery
+- ✅ Real-time temperature and humidity updates
+- ✅ Thermostat control (set temperature, on/off)
+- ✅ Auto-reconnect on connection loss
+- ✅ Detailed debug logging
+
+**Full documentation**: See [`domoticz/README.md`](domoticz/README.md) for troubleshooting and advanced configuration.
+
+### Home Assistant Integration
+
+You can integrate Tado Local with Home Assistant using the REST integration:
+
+```yaml
+# configuration.yaml
+
+sensor:
+  - platform: rest
+    name: "Living Room Temperature"
+    resource: "http://localhost:4407/zones/1"
+    value_template: "{{ value_json.current_temperature }}"
+    unit_of_measurement: "°C"
+    
+climate:
+  - platform: generic_thermostat
+    name: "Living Room Heating"
+    # Configure with REST commands
+```
+
+**Note**: A native Home Assistant integration is on our roadmap!
+
+### Other Platforms
+
+The REST API works with any platform that supports HTTP requests:
+- **openHAB**: Use HTTP binding
+- **Node-RED**: HTTP request nodes
+- **HomeBridge**: HTTP webhooks
+- **Custom Scripts**: Python, JavaScript, bash + curl
+
+---
+
+## 📋 Installation & Configuration
+
+### Prerequisites
+
+### Prerequisites
+
+- **Python 3.11 or newer** ([Download](https://www.python.org/downloads/))
+- **Tado Internet Bridge** with HomeKit support (V3+ models)
+- **Network access** to your Tado bridge
+
+### Installation Steps
 
 ```bash
 # Clone the repository
@@ -33,80 +237,32 @@ cd TadoLocal
 # Install the package
 pip install -e .
 
-# Run from anywhere
-python -m tado_local --help
-# or
+# Verify installation
 tado-local --help
 ```
 
-### Development Installation
+### First-Time Setup
 
-```bash
-# Install dependencies manually
-pip install -r requirements.txt
+1. **Reset HomeKit pairing** on your bridge (see [Important Limitation](#-important-limitation) below)
 
-# Run directly (backward compatibility)
-python local.py --help
-```
+2. **Start with your bridge credentials**:
+   ```bash
+   tado-local --bridge-ip 192.168.1.100 --pin 123-45-678
+   ```
 
-## Setup & Usage
+3. **Complete cloud authentication** in your browser (for device metadata)
 
-### Initial Setup
+4. **Done!** Future runs only need:
+   ```bash
+   tado-local
+   ```
 
-**First time only** - requires both HomeKit PIN and Tado Cloud authentication:
-
-```bash
-# Start with bridge IP and HomeKit PIN
-python -m tado_local --bridge-ip 192.168.1.100 --pin 123-45-678
-
-# Or using the console script
-tado-local --bridge-ip 192.168.1.100 --pin 123-45-678
-```
-
-This performs:
-1. **HomeKit pairing** - Stores encrypted credentials for local bridge communication
-2. **Cloud API authentication** - Opens browser for OAuth login to fetch device metadata (battery status, zone names, etc.)
-3. Starts the API server on port 4407
-
-**Monitoring Cloud Authentication:**
-
-After starting the proxy:
-1. Open your browser to **`http://localhost:4407`** - the web UI
-2. Check the **Cloud** status indicator in the status bar
-3. If authentication is needed, click the "Authenticate" link displayed
-4. Log in with your Tado credentials in the browser
-5. The proxy automatically completes setup - no need to watch console logs!
-
-**Note**: Cloud authentication is one-time setup. The web UI makes this much easier to monitor than watching console output.
-
-### Subsequent Runs
-
-After setup is complete, simply run:
-
-```bash
-python -m tado_local
-```
-
-The proxy will:
-- Auto-discover your bridge (if only one pairing exists)
-- Use stored HomeKit credentials for local control
-- Use stored cloud credentials for periodic metadata updates (every 4 hours)
-- Start the API server on port 4407
-
-**Custom options** (if needed):
-
-```bash
-# Specify bridge IP explicitly
-python -m tado_local --bridge-ip 192.168.1.100
-
-# Custom port or database location
-python -m tado_local --port 8080 --state ./my-tado.db
-```
+### Configuration Options
 
 ### Configuration Options
 
 ```bash
-python -m tado_local --help
+tado-local --help
 
 Options:
   --state PATH          Path to state database (default: ~/.tado-local.db)
@@ -116,27 +272,23 @@ Options:
   --clear-pairings      Clear all existing pairings before starting
 ```
 
-## API Endpoints
+---
 
-Once running, access the API at `http://localhost:4407`:
+## 🔌 Using the Web Interface
 
-### Main Endpoints
+Once Tado Local is running, open your browser to `http://localhost:4407`
 
-- `GET /` - API information and available endpoints
-- `GET /status` - System status, statistics, and health
-- `GET /accessories` - All HomeKit accessories (raw data)
-- `GET /zones` - All Tado zones with associated devices
-- `GET /thermostats` - All thermostats with current readings
-- `POST /thermostats/{id}/set_temperature` - Set target temperature
-- `GET /events` - Server-Sent Events stream for real-time updates
-- `POST /refresh` - Manually refresh data from bridge
+### Main Features:
 
-### Interactive Documentation
+- **📊 Zone Dashboard**: See all your rooms with current temperature, humidity, and heating status
+- **🎛️ Zone Controls**: Click any zone to adjust target temperature and heating mode
+- **📈 History Charts**: View temperature trends, humidity, and heating activity over time (24h, 7d, 30d, 1y)
+- **☁️ Status Bar**: Monitor connection status to both the bridge and cloud API
+- **🔄 Real-time Updates**: The interface updates automatically as temperatures change
 
-- **Swagger UI**: `http://localhost:4407/docs` - Try out API calls directly
-- **ReDoc**: `http://localhost:4407/redoc` - Alternative documentation view
+---
 
-## Usage Examples
+## 🛠️ API Usage Examples
 
 ### Get Current State
 
@@ -144,8 +296,8 @@ Once running, access the API at `http://localhost:4407`:
 # All thermostats
 curl http://localhost:4407/thermostats
 
-# Specific zones
-curl http://localhost:4407/zones
+# Specific zone
+curl http://localhost:4407/zones/1
 
 # System status
 curl http://localhost:4407/status
@@ -159,256 +311,273 @@ curl -X POST http://localhost:4407/thermostats/1/set_temperature \
   -d '{"temperature": 21.5}'
 ```
 
+### Get History Data
+
+```bash
+# Last 24 hours
+curl http://localhost:4407/zones/1/history
+
+# Custom time range (Unix timestamps)
+curl "http://localhost:4407/zones/1/history?start_time=1699000000&end_time=1699086400"
+
+# With pagination
+curl "http://localhost:4407/zones/1/history?limit=500&offset=500"
+```
+
 ### Monitor Real-Time Events
 
 ```bash
-# Stream live updates
+# Stream live updates (Server-Sent Events)
 curl -N http://localhost:4407/events
 ```
 
-### Python Integration
+### Python Integration Example
 
 ```python
 import requests
+from datetime import datetime, timedelta
 
-# Get all thermostats
-response = requests.get("http://localhost:4407/thermostats")
-thermostats = response.json()
+TADO_API = "http://localhost:4407"
 
-for device in thermostats:
-    print(f"{device['zone']}: {device['current_temperature']}°C → {device['target_temperature']}°C")
+# Get all zones
+zones = requests.get(f"{TADO_API}/zones").json()
 
-# Set temperature
+for zone in zones:
+    print(f"{zone['name']}: {zone['current_temperature']}°C")
+    print(f"  Target: {zone['target_temperature']}°C")
+    print(f"  Humidity: {zone['humidity']}%")
+    print(f"  Heating: {'ON' if zone['heating_active'] else 'OFF'}")
+    print()
+
+# Set temperature for a specific thermostat
 requests.post(
-    "http://localhost:4407/thermostats/1/set_temperature",
+    f"{TADO_API}/thermostats/1/set_temperature",
     json={"temperature": 22.0}
 )
+
+# Get history for the last 7 days
+end_time = int(datetime.now().timestamp())
+start_time = int((datetime.now() - timedelta(days=7)).timestamp())
+
+history = requests.get(
+    f"{TADO_API}/zones/1/history",
+    params={"start_time": start_time, "end_time": end_time, "limit": 1000}
+).json()
+
+for record in history['history']:
+    print(f"{record['timestamp']}: {record['state']['cur_temp_c']}°C")
 ```
 
-## Important Limitation
+---
 
-### Single homekit connection
-One limitation of this, is that the TADO internet bridge currenly allows only a single homekit connection. So to use this proxy you will need to give access to this connection. Eventually we may be able to resolve this limitation by exposing the proxy as its own homekit device. But for now that is out of my scope. (PRs very welcome ;-))
-
-Things are currently in the very early stages of development. I'm able to connect to the bridge and expose the current data
-
-## Important Limitation
+## ⚠️ Important Limitation
 
 ### Single HomeKit Connection
 
-The Tado Internet Bridge currently allows **only ONE HomeKit connection at a time**. To use this proxy, you must:
+The Tado Internet Bridge hardware **only allows ONE HomeKit connection at a time**. 
 
-1. Remove any existing HomeKit pairings (iPhone Home app, Home Assistant, etc.)
-2. **OR** Reset the HomeKit configuration on the bridge
+**Before using Tado Local**, you must:
 
-### Resetting HomeKit Pairing
-
-On a Tado V3+ Internet Bridge:
-1. Press and hold the small reset button on the back for **10+ seconds**
-2. The LED will blink to confirm reset
-3. You can now pair with this proxy
-
-See [Tado's official guide](https://support.tado.com/en/articles/3387334-how-can-i-reset-the-homekit-configuration-of-the-internet-bridge) for more details.
-
-## Troubleshooting
-
-### Pairing Issues
-
-**"Device reports 'Unavailable' for pairing"**
-
-This means the bridge is already paired to another controller. Solutions:
-
-1. Check if paired to:
+1. **Remove existing HomeKit pairings** from:
    - iPhone/iPad Home app
-   - Home Assistant
+   - Home Assistant HomeKit Controller
    - Other HomeKit applications
 
-2. Remove the pairing from the other controller **OR** reset the bridge (see above)
+2. **OR reset the bridge's HomeKit configuration**:
+   - Press and hold the small reset button on the back for **10+ seconds**
+   - The LED will blink to confirm reset
+   - See [Tado's official guide](https://support.tado.com/en/articles/3387334-how-can-i-reset-the-homekit-configuration-of-the-internet-bridge)
 
-3. Verify you're using the correct PIN from the bridge label
+**Note**: This limitation is hardware-based. We may eventually expose Tado Local itself as a HomeKit bridge to work around this, but that's future work. Contributions welcome!
 
-### Connection Issues
+---
 
-If the connection drops (power cycle, network issue):
+## 🐛 Troubleshooting
 
-- The proxy automatically reconnects
-- Temporary `None` values are ignored to prevent false state updates
-- Events automatically restore correct state when connection returns
+### "Device reports 'Unavailable' for pairing"
 
-### Database Issues
+The bridge is already paired to another HomeKit controller. See [Important Limitation](#-important-limitation) above.
 
-To start fresh and re-pair:
+### Connection drops or "None" values
+
+The proxy automatically reconnects and ignores temporary `None` values. Wait a few seconds for the connection to restore.
+
+### Cloud authentication not working
+
+1. Check that port 4407 is accessible in your browser
+2. Visit `http://localhost:4407/status` to see the authentication URL
+3. Make sure you're using the correct Tado account credentials
+
+### Starting fresh
 
 ```bash
-# Remove old database (clears both HomeKit pairing and cloud credentials)
+# Remove database and re-pair
 rm ~/.tado-local.db
 
-# Re-run initial setup with bridge IP and PIN
-python -m tado_local --bridge-ip 192.168.1.100 --pin 123-45-678
-
-# Complete cloud authentication in browser (URL shown in console)
-# Then the proxy is ready - future runs don't need any arguments
-python -m tado_local
+# Run initial setup again
+tado-local --bridge-ip 192.168.1.100 --pin 123-45-678
 ```
 
-The cloud authentication URL is displayed during initial setup and also available at `http://localhost:4407/status` under the `cloud_api` section.
+---
 
-## Architecture
+## 🤝 Contributing
 
-### Technology Stack
+**We'd love your help!** Whether you're a casual user finding bugs or a developer adding features, all contributions are welcome.
 
-- **aiohomekit**: HomeKit protocol implementation for local bridge control
-- **FastAPI**: Modern REST API framework with automatic OpenAPI docs
-- **Tado Cloud API**: OAuth2 authentication for device metadata and battery status
-- **SQLite**: Persistent state, history, and credentials storage
-- **uvicorn**: ASGI web server
-- **Python 3.11+**: Async/await for efficient I/O
+### Ways to Contribute
 
-### Database Schema
+- **🐛 Report bugs**: [Open an issue](https://github.com/ampscm/TadoLocal/issues) with details
+- **💡 Suggest features**: Share your ideas in [Discussions](https://github.com/ampscm/TadoLocal/discussions)
+- **📝 Improve docs**: Fix typos, add examples, clarify instructions
+- **🔧 Write code**: Pick an issue or propose a new feature
+- **🧪 Test**: Try the alpha and report what works (or doesn't!)
 
-SQLite database stores:
-- **HomeKit pairings**: Encrypted credentials for bridge authentication  
-- **Controller identity**: Persistent pairing identity across restarts
-- **Cloud credentials**: OAuth2 tokens for Tado cloud API
-- **Devices & zones**: Device registry with zone organization and metadata
-- **State history**: Time-series data with 10-second bucketing
-- **Characteristic cache**: HomeKit accessory metadata
-- **Cloud cache**: Battery status, zone names, device types (refreshed every 4 hours)
+### For Developers
 
-### State Management
+**Priority areas needing help**:
 
-- **Event-driven updates**: Real-time notifications from HomeKit bridge for temperature, heating state, valve position
-- **Dual-speed polling**:
-  - Fast (60s): Humidity, battery level (characteristics that don't reliably send events)
-  - Slow (120s): All characteristics as safety net
-- **Cloud sync** (every 4 hours): Battery status, device metadata, zone configuration from Tado Cloud API
-- **Change detection**: Only saves to database when values actually change
-- **Network resilience**: Ignores `None` values from connection issues; events restore state
+- [x] **Domoticz plugin** - ✅ Already available in `domoticz/` directory!
+- [ ] **Home Assistant HACS integration** - Make installation easier for HA users
+- [ ] **Docker container** - Simplify deployment with docker-compose
+- [ ] **Web UI enhancements** - Additional controls, better mobile support
+- [ ] **Test coverage** - Unit and integration tests
+- [ ] **Multi-bridge support** - Handle multiple Tado systems
+- [ ] **HomeKit bridge** - Expose Tado Local as a HomeKit accessory (workaround for single connection limit)
+- [ ] **Documentation improvements** - More examples, tutorials, video guides
 
-### HomeKit Integration Features
+### Development Setup
 
-- **Persistent pairing**: Controller identity preserved across restarts
-- **Session resumption**: Can resume failed pairing attempts from Part 1
-- **Auto-reconnection**: Handles network interruptions transparently
-- **Full characteristic support**: Temperature, humidity, battery, valve position, heating state, etc.
-- **UUID mapping**: Human-readable names for HomeKit characteristics
+```bash
+# Clone and install in development mode
+git clone https://github.com/ampscm/TadoLocal.git
+cd TadoLocal
+pip install -e .[dev]
 
-## Development
+# Run with live reloading
+python -m tado_local --bridge-ip 192.168.1.100
+
+# Run tests (when available)
+pytest
+
+# Check code style
+ruff check .
+```
 
 ### Project Structure
 
 ```
 tado_local/
-├── local.py             # Backward compatibility entry point
-├── homekit_uuids.py     # HomeKit UUID to name mappings (legacy)
-├── requirements.txt     # Python dependencies
-├── setup.py            # Package configuration
-├── README.md           # This file
-└── tado_local/         # Main Python package
-    ├── __init__.py     # Package initialization
-    ├── __main__.py     # CLI entry point (python -m tado_local)
-    ├── api.py          # TadoLocalAPI class
-    ├── routes.py       # All FastAPI route handlers
-    ├── bridge.py       # HomeKit bridge pairing
-    ├── state.py        # Device state management
-    ├── cache.py        # Characteristic cache
-    ├── database.py     # Database schema definitions
-    └── homekit_uuids.py # UUID mappings
+├── __init__.py         # Package initialization  
+├── __main__.py         # CLI entry point
+├── api.py              # Main TadoLocalAPI class
+├── routes.py           # FastAPI REST endpoints
+├── bridge.py           # HomeKit bridge communication
+├── state.py            # Device state & history management
+├── cache.py            # Characteristic caching
+├── database.py         # SQLite schema
+├── homekit_uuids.py    # UUID mappings
+└── static/
+    └── index.html      # Web UI
 ```
 
-### Running in Development
+---
 
-```bash
-# Install in editable mode
-pip install -e .
+## 🏗️ Architecture
 
-# Run with logging
-python -m tado_local --bridge-ip 192.168.1.100 2>&1 | tee tado.log
+### How It Works
 
-# Or use backward compatibility mode
-python local.py --bridge-ip 192.168.1.100
-
-# Monitor database
-sqlite3 ~/.tado-local.db
-sqlite> .tables
-sqlite> SELECT * FROM devices;
-sqlite> SELECT * FROM zones;
+```
+┌─────────────────┐
+│  Tado Bridge    │ ←─── HomeKit Protocol (local, fast, no rate limits)
+│  (HomeKit)      │
+└────────┬────────┘
+         │
+         ↓
+┌─────────────────┐
+│  Tado Local     │ ←─── You are here
+│  (This Project) │
+└────────┬────────┘
+         │
+         ├──→ REST API (port 4407)
+         ├──→ Web UI (http://localhost:4407)
+         ├──→ Real-time Events (SSE)
+         └──→ SQLite Database (history & state)
+                │
+                ↓
+         ┌──────────────────┐
+         │  Your Smart Home │
+         │  - Domoticz      │
+         │  - Home Assistant│
+         │  - openHAB       │
+         │  - Custom Scripts│
+         └──────────────────┘
 ```
 
-### Testing
+### Technology Stack
 
-```bash
-# Test connection
-curl http://localhost:4407/status
+- **aiohomekit**: HomeKit protocol implementation
+- **FastAPI**: Modern REST API with automatic docs
+- **SQLite**: Persistent storage (history, credentials, state)
+- **Tado Cloud API**: Device metadata only (battery status, zone names)
+- **Python 3.11+**: Async/await for efficient performance
 
-# Test event stream
-curl -N http://localhost:4407/events
+### Data Flow
 
-# Test temperature change
-curl -X POST http://localhost:4407/thermostats/1/set_temperature \
-  -H "Content-Type: application/json" \
-  -d '{"temperature": 20.0}'
-```
+1. **Real-time updates**: HomeKit bridge sends notifications → Tado Local → Your apps (via SSE or polling)
+2. **Control commands**: Your apps → Tado Local REST API → HomeKit bridge → Tado devices
+3. **History storage**: All state changes saved to SQLite with 10-second resolution
+4. **Metadata sync**: Cloud API refreshed every 4 hours for battery status and zone names
 
-## Contributing
+---
 
-Contributions welcome! The project is actively developed.
+## 📄 License
 
-### Ideas
+Apache License 2.0 - see [LICENSE](LICENSE) file for details.
 
-- [x] Complete package refactoring (all code moved to tado_local package)
-- [x] Modular structure (api.py, routes.py, bridge.py, state.py, cache.py, database.py)
-- [x] Python -m execution support
-- [ ] Comprehensive test suite
-- [ ] Docker container & docker-compose
-- [ ] Home Assistant HACS integration
-- [ ] Web UI for configuration and monitoring
-- [ ] Advanced scheduling/automation features
-- [ ] Multi-bridge support
+Free for personal and commercial use. Attribution appreciated but not required.
 
-### Development Setup
+---
 
-```bash
-git clone https://github.com/ampscm/TadoLocal.git
-cd TadoLocal
-pip install -e .[dev]  # Development dependencies
-```
+## 🙏 Acknowledgments
 
-## License
+- Built on [aiohomekit](https://github.com/Jc2k/aiohomekit) - Excellent HomeKit protocol library
+- Inspired by [Home Assistant](https://www.home-assistant.io/) and [Domoticz](http://domoticz.com) communities
+- Thanks to everyone who reverse-engineered the Tado and HomeKit protocols
 
-Apache License 2.0 - see LICENSE file for details.
+---
 
-This project is compatible with all smart home products requiring cloud rate limit solutions for Tado devices.
+## 💬 Support & Community
 
-## Acknowledgments
+- **🐛 Bug Reports**: [GitHub Issues](https://github.com/ampscm/TadoLocal/issues)
+- **💭 Discussions**: [GitHub Discussions](https://github.com/ampscm/TadoLocal/discussions)  
+- **📖 API Docs**: `http://localhost:4407/docs` (when running)
 
-- Built on [aiohomekit](https://github.com/Jc2k/aiohomekit) for HomeKit protocol
-- Inspired by Domoticz and Home Assistant's local integrations
-- Thanks to the Tado and HomeKit communities for reverse engineering efforts
+---
 
-## Support & Community
+## 🎯 Roadmap
 
-- **Issues**: [GitHub Issues](https://github.com/ampscm/TadoLocal/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/ampscm/TadoLocal/discussions)
-- **Documentation**: Visit `/docs` endpoint when proxy is running
+### Current Status: **Alpha**
 
-## Status
+✅ **Working Now**:
+- Local HomeKit control
+- REST API with full documentation
+- Web UI with zone controls and visual history charts
+- **Native Domoticz plugin** (see `domoticz/` directory)
+- Real-time event streaming (SSE)
+- SQLite persistence and history
+- Auto-reconnection
+- Hybrid local + cloud architecture
 
-**Status**: Beta - Active development, production-ready for personal use
+🚧 **Coming Soon**:
+- Docker container
+- Home Assistant HACS integration
+- Improved mobile web UI
+- Advanced scheduling features
+- Multi-bridge support
 
-The proxy successfully manages:
-- ✅ Temperature control via HomeKit
-- ✅ Humidity monitoring (local sensors)
-- ✅ Battery status (cloud API, updated every 4 hours)
-- ✅ Valve positions (real-time)
-- ✅ Zone management and organization
-- ✅ Real-time event streams (SSE)
-- ✅ State persistence and history
-- ✅ Network resilience and auto-reconnection
-- ✅ Hybrid local + cloud architecture
+---
 
-Known limitations:
-- Single HomeKit connection (bridge hardware limitation)
-- Cloud authentication required for device metadata
-- Battery status updates every 4 hours (cloud API rate limits)
+**Ready to get started?** Jump to [Quick Start](#-quick-start) or check out the [API documentation](http://localhost:4407/docs) once you're running!
+
+**Questions?** Open a [Discussion](https://github.com/ampscm/TadoLocal/discussions) - we're here to help!
 
