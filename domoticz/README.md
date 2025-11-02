@@ -1,6 +1,6 @@
-# Tado Local Proxy Plugin for Domoticz
+# Tado Local Plugin for Domoticz
 
-This Domoticz plugin connects to the Tado Local Proxy API to monitor and control your Tado heating zones.
+This Domoticz plugin connects to Tado Local to monitor and control your Tado heating zones.
 
 ## Features
 
@@ -28,7 +28,7 @@ This Domoticz plugin connects to the Tado Local Proxy API to monitor and control
 3. **Enable the plugin**:
    - Go to Domoticz web interface
    - Navigate to: **Setup → Hardware**
-   - Click **Add** and select **Tado Local Proxy** from the Type dropdown
+   - Click **Add** and select **Tado Local** from the Type dropdown
    - Configure the plugin parameters (see below)
    - Click **Add**
 
@@ -36,7 +36,7 @@ This Domoticz plugin connects to the Tado Local Proxy API to monitor and control
 
 ### Parameters
 
-- **API URL** (required): The URL to your Tado Local Proxy API
+- **API URL** (required): The URL to your Tado Local instance
   - Default: `http://localhost:8000`
   - Example: `http://192.168.1.100:8000`
 
@@ -77,7 +77,7 @@ You can control devices using Domoticz scripts (Lua, dzVents, Python) or HTTP AP
 
 ### Plugin not connecting
 1. Verify the API URL is correct and reachable
-2. Check that Tado Local Proxy is running: `curl http://your-api-url/status`
+2. Check that Tado Local is running: `curl http://your-api-url/status`
 3. Enable Debug mode to see detailed logs
 4. Check Domoticz logs: **Setup → Log**
 
@@ -89,7 +89,7 @@ You can control devices using Domoticz scripts (Lua, dzVents, Python) or HTTP AP
 ### Connection keeps dropping
 1. Increase retry interval
 2. Check network stability
-3. Verify Tado Local Proxy is stable
+3. Verify Tado Local is stable
 4. Check Domoticz logs for error messages
 
 ## API Endpoints Used
@@ -100,16 +100,16 @@ You can control devices using Domoticz scripts (Lua, dzVents, Python) or HTTP AP
 ## Requirements
 
 - Domoticz 2020.2 or newer
-- Tado Local Proxy running and accessible
+- Tado Local running and accessible
 - Python 3.x (included with Domoticz)
 
 ## Support
 
 For issues related to:
-- **The plugin**: Open an issue on the Tado Local Proxy GitHub repository
+- **The plugin**: Open an issue on the Tado Local GitHub repository
 - **Domoticz**: Visit the Domoticz forum
-- **Tado Local Proxy API**: Check the main project documentation
+- **Tado Local**: Check the main project documentation
 
 ## License
 
-This plugin is part of the Tado Local Proxy project and follows the same license.
+This plugin is part of the Tado Local project and follows the same license.

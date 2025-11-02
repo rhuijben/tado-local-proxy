@@ -494,16 +494,16 @@ class DeviceStateManager:
         
         logger.debug(f"Saved device {device_id} state to history bucket {bucket}")
     
-    def get_device_history(self, device_id: int, start_time: float = None, end_time: float = None, limit: int = 100) -> List[Dict]:
-        """Get device state history."""
+    def get_device_history(self, device_id: int, start_time: float = None, end_time: float = None, limit: int = 100, offset: int = 0) -> List[Dict]:
+        """Get device state history with standardized format."""
         conn = sqlite3.connect(self.db_path)
         
         query = """
-            SELECT timestamp_bucket, current_temperature, target_temperature,
+            SELECT current_temperature, target_temperature,
                    current_heating_cooling_state, target_heating_cooling_state,
                    heating_threshold_temperature, cooling_threshold_temperature,
                    temperature_display_units, battery_level, status_low_battery, humidity,
-                   updated_at
+                   valve_position, updated_at
             FROM device_state_history
             WHERE device_id = ?
         """
@@ -517,12 +517,34 @@ class DeviceStateManager:
             query += " AND timestamp_bucket <= ?"
             params.append(self._get_timestamp_bucket(end_time))
         
-        query += " ORDER BY timestamp_bucket DESC LIMIT ?"
+        query += " ORDER BY timestamp_bucket DESC LIMIT ? OFFSET ?"
         params.append(limit)
+        params.append(offset)
         
         cursor = conn.execute(query, params)
-        columns = [desc[0] for desc in cursor.description]
-        history = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        
+        history = []
+        for row in cursor.fetchall():
+            cur_temp_c = row[0]
+            target_temp_c = row[1]
+            
+            # Build standardized state format (same as /devices, /zones, /events)
+            record = {
+                'state': {
+                    'cur_temp_c': cur_temp_c,
+                    'cur_temp_f': round(cur_temp_c * 9/5 + 32, 1) if cur_temp_c is not None else None,
+                    'target_temp_c': target_temp_c,
+                    'target_temp_f': round(target_temp_c * 9/5 + 32, 1) if target_temp_c is not None else None,
+                    'mode': row[3],  # target_heating_cooling_state
+                    'cur_heating': row[2],  # current_heating_cooling_state
+                    'hum_perc': row[9],  # humidity
+                    'valve_position': row[10],  # valve_position
+                    'battery_low': bool(row[8]) if row[8] is not None else False,  # status_low_battery
+                },
+                'timestamp': row[11]  # updated_at (last update time in bucket)
+            }
+            history.append(record)
+        
         conn.close()
         
         return history

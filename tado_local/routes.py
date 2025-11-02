@@ -29,7 +29,7 @@ from fastapi.responses import StreamingResponse, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from .__version__ import __version__
-from .homekit_uuids import enhance_accessory_data, get_service_name, get_characteristic_name
+from .homekit_uuids import enhance_accessory_data
 from .state import DeviceStateManager
 
 # Configure logging
@@ -60,7 +60,7 @@ def register_routes(app: FastAPI, get_tado_api):
         get_tado_api: Callable that returns the current TadoLocalAPI instance
     """
     
-    @app.get("/", tags=["Web UI"])
+    @app.get("/", include_in_schema=False)
     async def root():
         """Serve the web UI."""
         static_dir = Path(__file__).parent / "static"
@@ -96,8 +96,7 @@ def register_routes(app: FastAPI, get_tado_api):
                 "events": "/events",
                 "accessories": "/accessories",
                 "refresh": "/refresh",
-                "refresh_cloud": "/refresh/cloud",
-                "debug": "/debug/characteristics"
+                "refresh_cloud": "/refresh/cloud"
             }
         }
 
@@ -225,7 +224,7 @@ def register_routes(app: FastAPI, get_tado_api):
         
         raise HTTPException(status_code=404, detail=f"Accessory {accessory_id} not found")
 
-    @app.get("/thermostats", tags=["Tado"])
+    @app.get("/thermostats", tags=["Thermostats"])
     async def get_thermostats():
         """
         Get all thermostat devices with standardized state.
@@ -288,8 +287,8 @@ def register_routes(app: FastAPI, get_tado_api):
         
         return {"thermostats": thermostats, "count": len(thermostats)}
 
-    @app.get("/thermostats/{id}", tags=["Tado"])
-    async def get_thermostat(id: int):
+    @app.get("/thermostats/{thermostat_id}", tags=["Thermostats"])
+    async def get_thermostat(thermostat_id: int):
         """Get specific thermostat by device ID with standardized state."""
         tado_api = get_tado_api()
         if not tado_api:
@@ -301,12 +300,12 @@ def register_routes(app: FastAPI, get_tado_api):
         # Find accessory by device ID
         accessory = None
         for acc in tado_api.accessories_cache:
-            if acc.get('id') == id:
+            if acc.get('id') == thermostat_id:
                 accessory = acc
                 break
         
         if not accessory:
-            raise HTTPException(status_code=404, detail=f"Device with ID {id} not found")
+            raise HTTPException(status_code=404, detail=f"Device with ID {thermostat_id} not found")
         
         # Check if it's a thermostat
         is_thermostat = False
@@ -572,10 +571,10 @@ def register_routes(app: FastAPI, get_tado_api):
         
         return {'zone_id': zone_id, 'updated': True}
 
-    @app.post("/zones/{zone_id}/control", tags=["Zones"])
-    async def control_zone(
+    @app.post("/zones/{zone_id}/set", tags=["Zones"])
+    async def set_zone(
         zone_id: int, 
-        target_temperature: Optional[float] = None,
+        temperature: Optional[float] = None,
         heating_enabled: Optional[bool] = None
     ):
         """
@@ -583,13 +582,19 @@ def register_routes(app: FastAPI, get_tado_api):
         
         Args:
             zone_id: Zone ID to control
-            target_temperature: Target temperature in °C (e.g., 21.0)
+            temperature: Target temperature in °C (0-30). 
+                        - 0 = disable heating (implies heating_enabled=false)
+                        - >= 5 = enable heating (implies heating_enabled=true unless explicitly set to false)
             heating_enabled: Enable/disable heating mode (true/false)
         
         Returns:
             Success status and applied values
             
         Notes:
+            - Smart defaults: 
+              - temperature = 0 implies heating_enabled=false
+              - temperature >= 5°C implies heating_enabled=true
+            - Explicitly set heating_enabled to override smart defaults
             - Commands are sent to the zone's leader device
             - The leader propagates changes to other devices as needed
             - heating_enabled controls the heat mode (OFF=0, HEAT=1)
@@ -601,6 +606,13 @@ def register_routes(app: FastAPI, get_tado_api):
         
         if not tado_api.pairing:
             raise HTTPException(status_code=503, detail="Bridge not connected")
+        
+        # Apply smart defaults
+        if temperature is not None and heating_enabled is None:
+            if temperature == 0:
+                heating_enabled = False
+            elif temperature >= 5.0:
+                heating_enabled = True
         
         # Get zone info
         conn = sqlite3.connect(tado_api.state_manager.db_path)
@@ -624,12 +636,16 @@ def register_routes(app: FastAPI, get_tado_api):
         # Build characteristic updates
         char_updates = {}
         
-        if target_temperature is not None:
+        if temperature is not None:
             # Validate temperature range (5-30°C is typical for Tado)
-            if target_temperature < 5.0 or target_temperature > 30.0:
-                raise HTTPException(status_code=400, detail="Temperature must be between 5 and 30°C")
-            char_updates['target_temperature'] = target_temperature
-            logger.info(f"Zone {zone_id} ({zone_name}): Setting target_temperature to {target_temperature}°C")
+            if temperature < 0.0 or temperature > 30.0:
+                raise HTTPException(status_code=400, detail="Temperature must be between 0 and 30°C")
+            if temperature > 0 and temperature < 5.0:
+                raise HTTPException(status_code=400, detail="Temperature must be 0 (off) or between 5 and 30°C")
+            
+            if temperature > 0:  # Only set if not turning off
+                char_updates['target_temperature'] = temperature
+                logger.info(f"Zone {zone_id} ({zone_name}): Setting target_temperature to {temperature}°C")
         
         if heating_enabled is not None:
             # 0 = OFF, 1 = HEAT
@@ -650,7 +666,7 @@ def register_routes(app: FastAPI, get_tado_api):
                 'leader_device_id': leader_device_id,
                 'leader_serial': leader_serial,
                 'applied': {
-                    'target_temperature': target_temperature,
+                    'target_temperature': temperature,
                     'heating_enabled': heating_enabled
                 }
             }
@@ -658,155 +674,6 @@ def register_routes(app: FastAPI, get_tado_api):
         except Exception as e:
             logger.error(f"Failed to control zone {zone_id}: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to set zone control: {str(e)}")
-
-    @app.post("/zones/{zone_id}/set", tags=["Zones"])
-    async def set_zone(
-        zone_id: int, 
-        temperature: Optional[float] = None,
-        heating_enabled: Optional[bool] = None
-    ):
-        """
-        Standardized control endpoint for zone heating.
-        
-        Args:
-            zone_id: Zone ID to control
-            temperature: Target temperature in °C (0-30). 
-                        - 0 = disable heating (implies heating_enabled=false)
-                        - >= 5 = enable heating (implies heating_enabled=true unless explicitly set to false)
-            heating_enabled: Enable/disable heating mode (true/false)
-        
-        Returns:
-            Success status and applied values
-            
-        Notes:
-            - Smart defaults: 
-              - temperature = 0 implies heating_enabled=false
-              - temperature >= 5°C implies heating_enabled=true
-            - Explicitly set heating_enabled to override smart defaults
-            - Commands route through the zone's leader device
-        """
-        # Apply smart defaults
-        if temperature is not None and heating_enabled is None:
-            if temperature == 0:
-                # Setting to 0 implies disable
-                heating_enabled = False
-            elif temperature >= 5.0:
-                # Setting >= 5 implies enable
-                heating_enabled = True
-        
-        # Forward to existing control_zone implementation
-        return await control_zone(zone_id, temperature, heating_enabled)
-
-    @app.post("/devices/{device_id}/set", tags=["Devices"])
-    async def set_device(
-        device_id: int,
-        temperature: Optional[float] = None,
-        heating_enabled: Optional[bool] = None
-    ):
-        """
-        Standardized control endpoint for device heating.
-        
-        Args:
-            device_id: Device ID to control
-            temperature: Target temperature in °C (0-30).
-                        - 0 = disable heating (implies heating_enabled=false)
-                        - >= 5 = enable heating (implies heating_enabled=true unless explicitly set to false)
-            heating_enabled: Enable/disable heating mode (true/false)
-        
-        Returns:
-            Success status and applied values
-            
-        Notes:
-            - Smart defaults:
-              - temperature = 0 implies heating_enabled=false
-              - temperature >= 5°C implies heating_enabled=true
-            - Commands are forwarded to the device's zone leader
-            - If device is not in a zone, direct control is attempted
-        """
-        tado_api = get_tado_api()
-        if not tado_api:
-            raise HTTPException(status_code=503, detail="API not initialized")
-        
-        # Get device's zone
-        conn = sqlite3.connect(tado_api.state_manager.db_path)
-        cursor = conn.execute("""
-            SELECT d.zone_id, d.serial_number, d.name
-            FROM devices d
-            WHERE d.device_id = ?
-        """, (device_id,))
-        row = cursor.fetchone()
-        conn.close()
-        
-        if not row:
-            raise HTTPException(status_code=404, detail=f"Device {device_id} not found")
-        
-        zone_id, serial, device_name = row
-        
-        if zone_id:
-            # Forward to zone control
-            logger.info(f"Device {device_id} ({device_name}): Forwarding control to zone {zone_id}")
-            
-            # Apply smart defaults
-            if temperature is not None and heating_enabled is None:
-                if temperature == 0:
-                    heating_enabled = False
-                elif temperature >= 5.0:
-                    heating_enabled = True
-            
-            result = await control_zone(zone_id, temperature, heating_enabled)
-            result['controlled_via'] = 'zone'
-            result['device_id'] = device_id
-            result['device_name'] = device_name
-            return result
-        else:
-            raise HTTPException(status_code=400, detail=f"Device {device_id} is not assigned to a zone. Assign it to a zone first.")
-
-    @app.post("/thermostats/{device_id}/set", tags=["Thermostats"])
-    async def set_thermostat(
-        device_id: int,
-        temperature: Optional[float] = None,
-        heating_enabled: Optional[bool] = None
-    ):
-        """
-        Standardized control endpoint for thermostat heating.
-        
-        Args:
-            device_id: Thermostat device ID to control
-            temperature: Target temperature in °C (0-30).
-                        - 0 = disable heating (implies heating_enabled=false)
-                        - >= 5 = enable heating (implies heating_enabled=true unless explicitly set to false)
-            heating_enabled: Enable/disable heating mode (true/false)
-        
-        Returns:
-            Success status and applied values
-            
-        Notes:
-            - Smart defaults:
-              - temperature = 0 implies heating_enabled=false
-              - temperature >= 5°C implies heating_enabled=true
-            - Commands are forwarded to the device's zone leader
-            - Alias for /devices/{id}/set with thermostat-specific naming
-        """
-        # Forward to device set endpoint (which handles zone forwarding)
-        return await set_device(device_id, temperature, heating_enabled)
-
-
-    @app.put("/devices/{device_id}/zone", tags=["Devices"])
-    async def assign_device_to_zone(device_id: int, zone_id: Optional[int] = None):
-        """Assign a device to a zone (or remove from zone if zone_id is None)."""
-        tado_api = get_tado_api()
-        if not tado_api:
-            raise HTTPException(status_code=503, detail="API not initialized")
-        
-        conn = sqlite3.connect(tado_api.state_manager.db_path)
-        conn.execute("UPDATE devices SET zone_id = ? WHERE device_id = ?", (zone_id, device_id))
-        conn.commit()
-        conn.close()
-        
-        # Reload device cache
-        tado_api.state_manager._load_device_cache()
-        
-        return {'device_id': device_id, 'zone_id': zone_id, 'updated': True}
 
     @app.get("/devices", tags=["Devices"])
     async def get_devices():
@@ -866,25 +733,25 @@ def register_routes(app: FastAPI, get_tado_api):
             "count": len(devices)
         }
 
-    @app.get("/devices/{id}", tags=["Devices"])
-    async def get_device(id: int):
+    @app.get("/devices/{device_id}", tags=["Devices"])
+    async def get_device(device_id: int):
         """
         Get specific device with standardized state by ID (database device_id).
         
         Args:
-            id: Device ID (database ID)
+            device_id: Device ID (database ID)
         """
         tado_api = get_tado_api()
         if not tado_api:
             raise HTTPException(status_code=503, detail="API not initialized")
         
         all_devices = tado_api.state_manager.get_all_devices()
-        device_info = next((d for d in all_devices if d['device_id'] == id), None)
+        device_info = next((d for d in all_devices if d['device_id'] == device_id), None)
         
         if not device_info:
-            raise HTTPException(status_code=404, detail=f"Device {id} not found")
+            raise HTTPException(status_code=404, detail=f"Device {device_id} not found")
         
-        state = tado_api.state_manager.get_current_state(id)
+        state = tado_api.state_manager.get_current_state(device_id)
         
         # Build standardized state
         cur_temp_c = state.get('current_temperature')
@@ -918,39 +785,128 @@ def register_routes(app: FastAPI, get_tado_api):
         
         return device
 
-    @app.get("/devices/{id}/history", tags=["Devices"])
+    @app.get("/devices/{device_id}/history", tags=["Devices"])
     async def get_device_history(
-        id: int,
+        device_id: int,
         start_time: Optional[float] = None,
         end_time: Optional[float] = None,
-        limit: int = 100
+        limit: int = 100,
+        offset: int = 0
     ):
         """
         Get device state history.
         
         Args:
-            id: Device ID
+            device_id: Device ID
             start_time: Start timestamp (Unix epoch)
             end_time: End timestamp (Unix epoch)
             limit: Maximum number of records to return (default: 100)
+            offset: Number of records to skip for pagination (default: 0)
+        
+        Returns:
+            List of historical state snapshots with standardized state format.
+            Each record contains a 'state' object (matching /devices format) and 'timestamp'.
         """
         tado_api = get_tado_api()
         if not tado_api:
             raise HTTPException(status_code=503, detail="API not initialized")
         
         history = tado_api.state_manager.get_device_history(
-            id, start_time, end_time, limit
+            device_id, start_time, end_time, limit, offset
         )
         
         return {
-            "id": id,
+            "device_id": device_id,
             "history": history,
-            "count": len(history)
+            "count": len(history),
+            "limit": limit,
+            "offset": offset
         }
 
-    @app.get("/thermostats/{device_id}/history", tags=["Thermostats"])
-    async def get_thermostat_history(
+    @app.post("/devices/{device_id}/set", tags=["Devices"])
+    async def set_device(
         device_id: int,
+        temperature: Optional[float] = None,
+        heating_enabled: Optional[bool] = None
+    ):
+        """
+        Standardized control endpoint for device heating.
+        
+        Args:
+            device_id: Device ID to control
+            temperature: Target temperature in °C (0-30).
+                        - 0 = disable heating (implies heating_enabled=false)
+                        - >= 5 = enable heating (implies heating_enabled=true unless explicitly set to false)
+            heating_enabled: Enable/disable heating mode (true/false)
+        
+        Returns:
+            Success status and applied values
+            
+        Notes:
+            - Smart defaults:
+              - temperature = 0 implies heating_enabled=false
+              - temperature >= 5°C implies heating_enabled=true
+            - Commands are forwarded to the device's zone leader
+            - If device is not in a zone, direct control is attempted
+        """
+        tado_api = get_tado_api()
+        if not tado_api:
+            raise HTTPException(status_code=503, detail="API not initialized")
+        
+        # Get device's zone
+        conn = sqlite3.connect(tado_api.state_manager.db_path)
+        cursor = conn.execute("""
+            SELECT d.zone_id, d.serial_number, d.name
+            FROM devices d
+            WHERE d.device_id = ?
+        """, (device_id,))
+        row = cursor.fetchone()
+        conn.close()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Device {device_id} not found")
+        
+        zone_id, serial, device_name = row
+        
+        if zone_id:
+            # Forward to zone control
+            logger.info(f"Device {device_id} ({device_name}): Forwarding control to zone {zone_id}")
+            
+            # Apply smart defaults
+            if temperature is not None and heating_enabled is None:
+                if temperature == 0:
+                    heating_enabled = False
+                elif temperature >= 5.0:
+                    heating_enabled = True
+            
+            result = await set_zone(zone_id, temperature, heating_enabled)
+            result['controlled_via'] = 'zone'
+            result['device_id'] = device_id
+            result['device_name'] = device_name
+            return result
+        else:
+            raise HTTPException(status_code=400, detail=f"Device {device_id} is not assigned to a zone. Assign it to a zone first.")
+
+    @app.put("/devices/{device_id}/zone", tags=["Devices"])
+    async def assign_device_to_zone(device_id: int, zone_id: Optional[int] = None):
+        """Assign a device to a zone (or remove from zone if zone_id is None)."""
+        tado_api = get_tado_api()
+        if not tado_api:
+            raise HTTPException(status_code=503, detail="API not initialized")
+        
+        conn = sqlite3.connect(tado_api.state_manager.db_path)
+        conn.execute("UPDATE devices SET zone_id = ? WHERE device_id = ?", (zone_id, device_id))
+        conn.commit()
+        conn.close()
+        
+        # Reload device cache
+        tado_api.state_manager._load_device_cache()
+        
+        return {'device_id': device_id, 'zone_id': zone_id, 'updated': True}
+
+    @app.get("/thermostats/{thermostat_id}/history", tags=["Thermostats"])
+    async def get_thermostat_history(
+        thermostat_id: int,
         start_time: Optional[float] = None,
         end_time: Optional[float] = None,
         limit: int = 100
@@ -959,13 +915,77 @@ def register_routes(app: FastAPI, get_tado_api):
         Get thermostat state history (forwarded to device history).
         
         Args:
-            device_id: Thermostat device ID
+            thermostat_id: Thermostat device ID
             start_time: Start timestamp (Unix epoch)
             end_time: End timestamp (Unix epoch)
             limit: Maximum number of records to return (default: 100)
         """
         # Forward to device history
-        return await get_device_history(device_id, start_time, end_time, limit)
+        return await get_device_history(thermostat_id, start_time, end_time, limit)
+
+    @app.post("/thermostats/{thermostat_id}/set", tags=["Thermostats"])
+    async def set_thermostat(
+        thermostat_id: int,
+        temperature: Optional[float] = None,
+        heating_enabled: Optional[bool] = None
+    ):
+        """
+        Standardized control endpoint for thermostat heating.
+        
+        Args:
+            thermostat_id: Thermostat device ID to control
+            temperature: Target temperature in °C (0-30).
+                        - 0 = disable heating (implies heating_enabled=false)
+                        - >= 5 = enable heating (implies heating_enabled=true unless explicitly set to false)
+            heating_enabled: Enable/disable heating mode (true/false)
+        
+        Returns:
+            Success status and applied values
+            
+        Notes:
+            - Smart defaults:
+              - temperature = 0 implies heating_enabled=false
+              - temperature >= 5°C implies heating_enabled=true
+            - Commands are forwarded to the device's zone leader
+            - Alias for /devices/{id}/set with thermostat-specific naming
+        """
+        tado_api = get_tado_api()
+        if not tado_api:
+            raise HTTPException(status_code=503, detail="API not initialized")
+        
+        # Get device's zone
+        conn = sqlite3.connect(tado_api.state_manager.db_path)
+        cursor = conn.execute("""
+            SELECT d.zone_id, d.serial_number, d.name
+            FROM devices d
+            WHERE d.device_id = ?
+        """, (thermostat_id,))
+        row = cursor.fetchone()
+        conn.close()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Device {thermostat_id} not found")
+        
+        zone_id, serial, device_name = row
+        
+        if zone_id:
+            # Forward to zone control
+            logger.info(f"Device {thermostat_id} ({device_name}): Forwarding control to zone {zone_id}")
+            
+            # Apply smart defaults
+            if temperature is not None and heating_enabled is None:
+                if temperature == 0:
+                    heating_enabled = False
+                elif temperature >= 5.0:
+                    heating_enabled = True
+            
+            result = await set_zone(zone_id, temperature, heating_enabled)
+            result['controlled_via'] = 'zone'
+            result['device_id'] = thermostat_id
+            result['device_name'] = device_name
+            return result
+        else:
+            raise HTTPException(status_code=400, detail=f"Device {thermostat_id} is not assigned to a zone. Assign it to a zone first.")
 
     @app.get("/zones/{zone_id}/history", tags=["Zones"])
     async def get_zone_history(
@@ -1016,42 +1036,6 @@ def register_routes(app: FastAPI, get_tado_api):
         result['leader_device_id'] = leader_device_id
         
         return result
-
-
-    @app.post("/thermostats/{accessory_id}/set_temperature", tags=["Tado"])
-    async def set_thermostat_temperature(accessory_id: int, temperature: float):
-        """Set target temperature for a specific thermostat."""
-        tado_api = get_tado_api()
-        if not tado_api.pairing:
-            raise HTTPException(status_code=503, detail="Bridge not connected")
-        
-        try:
-            # Find the thermostat service and target temperature characteristic
-            accessories = tado_api.accessories_cache
-            
-            for accessory in accessories:
-                if accessory.get('aid') == accessory_id:
-                    services = accessory.get('services', [])
-                    for service in services:
-                        if service.get('type') == 'public.hap.service.thermostat':
-                            for char in service.get('characteristics', []):
-                                if char.get('type') == 'public.hap.characteristic.target-temperature':
-                                    # Set the temperature
-                                    char_iid = char.get('iid')
-                                    characteristics = [(accessory_id, char_iid, temperature)]
-                                    await tado_api.pairing.put_characteristics(characteristics)
-                                    
-                                    return {
-                                        "success": True,
-                                        "accessory_id": accessory_id,
-                                        "target_temperature": temperature,
-                                        "message": f"Set target temperature to {temperature} C"
-                                    }
-            
-            raise HTTPException(status_code=404, detail=f"Thermostat {accessory_id} not found")
-            
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to set temperature: {e}")
 
     @app.get("/events", tags=["Events"])
     async def get_events(refresh_interval: Optional[int] = None, types: Optional[str] = None):
@@ -1262,144 +1246,6 @@ def register_routes(app: FastAPI, get_tado_api):
             }
         )
 
-    @app.get("/events/zones", tags=["Events"])
-    async def get_zone_events(refresh_interval: Optional[int] = None):
-        """
-        Server-Sent Events (SSE) endpoint for zone-only updates.
-        
-        Args:
-            refresh_interval: Optional interval in seconds to send periodic refresh updates
-                            even when state hasn't changed. Useful for clients like Domoticz
-                            that need regular updates for statistics and "last seen" tracking.
-                            Recommended: 300 (5 minutes). Default: None (only send on changes).
-        
-        This endpoint only sends zone-level state changes, not individual device events.
-        Useful for clients that only need zone aggregation without device details.
-        
-        Event Types:
-        
-        1. Zone State Change:
-           {
-               "type": "zone",
-               "zone_id": 4,
-               "zone_name": "Studeerkamer",
-               "state": {
-                   "cur_temp_c": 21.5,
-                   "cur_temp_f": 70.7,
-                   "hum_perc": 55,
-                   "target_temp_c": 21.0,
-                   "target_temp_f": 69.8,
-                   "mode": 1,
-                   "cur_heating": 1
-               },
-               "timestamp": 1730477890.123
-           }
-        
-        2. Keepalive (every 30 seconds):
-           {
-               "type": "keepalive",
-               "timestamp": 1730477890.123
-           }
-        
-        State Field Reference:
-            mode: 0=Off, 1=Heat (TargetHeatingCoolingState)
-            cur_heating: 0=Off, 1=Heating, 2=Cooling (CurrentHeatingCoolingState)
-            Temperatures provided in both Celsius (_c) and Fahrenheit (_f)
-        
-        Usage Example:
-            const eventSource = new EventSource('/events/zones');
-            eventSource.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                
-                if (data.type === 'zone') {
-                    updateZone(data.zone_id, data.state);
-                }
-            };
-        """
-        tado_api = get_tado_api()
-        
-        async def event_publisher():
-            # Create a queue for this client
-            client_queue = asyncio.Queue()
-            tado_api.zone_event_listeners.append(client_queue)
-            
-            last_refresh = time.time() if refresh_interval else None
-            
-            try:
-                while True:
-                    # Calculate timeout based on refresh_interval
-                    if refresh_interval and last_refresh:
-                        time_since_refresh = time.time() - last_refresh
-                        timeout = max(1, refresh_interval - time_since_refresh)
-                    else:
-                        timeout = 30
-                    
-                    # Wait for events
-                    try:
-                        event_data = await asyncio.wait_for(client_queue.get(), timeout=timeout)
-                        
-                        # Check for shutdown signal
-                        if event_data is None:
-                            logger.debug("Zone SSE stream received shutdown signal")
-                            break
-                        
-                        yield event_data
-                        
-                        # Reset refresh timer on any event
-                        if refresh_interval:
-                            last_refresh = time.time()
-                            
-                    except asyncio.TimeoutError:
-                        # Check if we should send a refresh update
-                        if refresh_interval and last_refresh and (time.time() - last_refresh >= refresh_interval):
-                            # Send refresh updates for all zones
-                            conn = sqlite3.connect(tado_api.state_manager.db_path)
-                            cursor = conn.execute("""
-                                SELECT zone_id, name 
-                                FROM zones 
-                                WHERE zone_id IS NOT NULL
-                                ORDER BY zone_id
-                            """)
-                            zones = cursor.fetchall()
-                            conn.close()
-                            
-                            for zone_id, zone_name in zones:
-                                zone_state = tado_api.state_manager.get_zone_state(zone_id)
-                                if zone_state:
-                                    event_obj = {
-                                        'type': 'zone',
-                                        'zone_id': zone_id,
-                                        'zone_name': zone_name,
-                                        'state': zone_state,
-                                        'timestamp': time.time(),
-                                        'refresh': True
-                                    }
-                                    yield f"data: {json.dumps(event_obj)}\n\n"
-                            
-                            last_refresh = time.time()
-                        else:
-                            # Send keepalive
-                            keepalive_obj = {'type': 'keepalive', 'timestamp': time.time()}
-                            yield f"data: {json.dumps(keepalive_obj)}\n\n"
-                        
-            except asyncio.CancelledError:
-                logger.debug("Zone SSE stream cancelled")
-                pass
-            finally:
-                # Remove this client's queue
-                if client_queue in tado_api.zone_event_listeners:
-                    tado_api.zone_event_listeners.remove(client_queue)
-        
-        return StreamingResponse(
-            event_publisher(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "Content-Type": "text/event-stream"
-            }
-        )
-
     @app.post("/refresh", tags=["Admin"])
     async def refresh_data():
         """Manually refresh accessories data from HomeKit bridge."""
@@ -1491,166 +1337,5 @@ def register_routes(app: FastAPI, get_tado_api):
         except Exception as e:
             logger.error(f"Error refreshing cloud data: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to refresh cloud data: {str(e)}")
-
-    @app.get("/debug/characteristics", tags=["Debug"], include_in_schema=False)
-    async def debug_characteristics():
-        """
-        Compare cached values vs live polled values to identify characteristics that don't send events.
-        This helps diagnose why some values (like humidity) aren't updating via events.
-        """
-        tado_api = get_tado_api()
-        if not tado_api or not tado_api.pairing:
-            raise HTTPException(status_code=503, detail="API not initialized")
-        
-        # Get all readable characteristics
-        chars_to_check = []
-        char_info = {}
-        
-        for accessory in tado_api.accessories_cache:
-            aid = accessory.get('aid')
-            device_id = accessory.get('id')
-            serial = accessory.get('serial_number')
-            
-            for service in accessory.get('services', []):
-                service_name = get_service_name(service.get('type', ''))
-                
-                for char in service.get('characteristics', []):
-                    iid = char.get('iid')
-                    char_type = char.get('type', '').lower()
-                    char_name = get_characteristic_name(char_type)
-                    perms = char.get('perms', [])
-                    cached_value = char.get('value')
-                    
-                    if 'pr' in perms:  # Readable
-                        chars_to_check.append((aid, iid))
-                        char_info[(aid, iid)] = {
-                            'device_id': device_id,
-                            'serial_number': serial,
-                            'aid': aid,
-                            'iid': iid,
-                            'service': service_name,
-                            'characteristic': char_name,
-                            'type': char_type,
-                            'cached_value': cached_value,
-                            'has_events': 'ev' in perms,
-                            'perms': perms
-                        }
-        
-        logger.info(f"Polling {len(chars_to_check)} characteristics for debug comparison...")
-        
-        # Poll all characteristics in batches
-        batch_size = 20
-        differences = []
-        no_event_changes = []
-        
-        for i in range(0, len(chars_to_check), batch_size):
-            batch = chars_to_check[i:i+batch_size]
-            
-            try:
-                results = await tado_api.pairing.get_characteristics(batch)
-                
-                for (aid, iid) in batch:
-                    if (aid, iid) in results:
-                        live_value = results[(aid, iid)].get('value')
-                        info = char_info[(aid, iid)]
-                        cached_value = info['cached_value']
-                        
-                        # Update info with live value
-                        info['live_value'] = live_value
-                        info['values_match'] = (live_value == cached_value)
-                        
-                        # Track differences
-                        if live_value != cached_value:
-                            differences.append(info.copy())
-                            
-                            # Highlight characteristics that changed but don't have event support
-                            # or have events but didn't fire
-                            if not info['has_events']:
-                                no_event_changes.append({
-                                    **info,
-                                    'reason': 'no_event_permission'
-                                })
-                            else:
-                                no_event_changes.append({
-                                    **info,
-                                    'reason': 'has_events_but_didnt_fire'
-                                })
-                                
-            except Exception as e:
-                logger.error(f"Error polling batch: {e}")
-        
-        return {
-            "total_characteristics": len(chars_to_check),
-            "differences_found": len(differences),
-            "differences": differences,
-            "no_event_changes": no_event_changes,
-            "note": "Characteristics in 'no_event_changes' either don't support events or have events but didn't fire when value changed"
-        }
-
-    @app.get("/debug/humidity", tags=["Debug"], include_in_schema=False)
-    async def debug_humidity():
-        """
-        Specific debug endpoint for humidity characteristics.
-        Shows all humidity sensors and their current status.
-        """
-        tado_api = get_tado_api()
-        if not tado_api or not tado_api.pairing:
-            raise HTTPException(status_code=503, detail="API not initialized")
-        
-        humidity_chars = []
-        
-        for accessory in tado_api.accessories_cache:
-            aid = accessory.get('aid')
-            device_id = accessory.get('id')
-            serial = accessory.get('serial_number')
-            
-            for service in accessory.get('services', []):
-                for char in service.get('characteristics', []):
-                    char_type = char.get('type', '').lower()
-                    
-                    if char_type == DeviceStateManager.CHAR_CURRENT_HUMIDITY:
-                        iid = char.get('iid')
-                        perms = char.get('perms', [])
-                        cached_value = char.get('value')
-                        
-                        # Poll live value
-                        try:
-                            results = await tado_api.pairing.get_characteristics([(aid, iid)])
-                            live_value = results[(aid, iid)].get('value') if (aid, iid) in results else None
-                        except Exception as e:
-                            live_value = f"Error: {e}"
-                        
-                        # Get event tracking info
-                        char_key = (aid, iid)
-                        last_event_value = tado_api.change_tracker['last_values'].get(char_key)
-                        has_event_subscription = char_key in tado_api.change_tracker['event_characteristics']
-                        
-                        # Get state manager value
-                        state_value = None
-                        if device_id:
-                            state = tado_api.state_manager.get_current_state(device_id)
-                            state_value = state.get('humidity')
-                        
-                        humidity_chars.append({
-                            'device_id': device_id,
-                            'serial_number': serial,
-                            'aid': aid,
-                            'iid': iid,
-                            'permissions': perms,
-                            'has_events': 'ev' in perms,
-                            'has_event_subscription': has_event_subscription,
-                            'cached_value': cached_value,
-                            'live_value': live_value,
-                            'state_manager_value': state_value,
-                            'last_event_value': last_event_value,
-                            'cached_vs_live_match': cached_value == live_value,
-                            'issue': 'CACHED_STALE' if cached_value != live_value else 'OK'
-                        })
-        
-        return {
-            "humidity_sensors": humidity_chars,
-            "count": len(humidity_chars),
-            "note": "If cached_vs_live_match is False and has_events is True, the device isn't sending humidity events"
-        }
     
     return app

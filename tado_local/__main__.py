@@ -40,14 +40,36 @@ logger = logging.getLogger('tado-local')
 bridge_pairing: Optional[IpPairing] = None
 tado_api: Optional[TadoLocalAPI] = None
 server: Optional[uvicorn.Server] = None
+shutdown_event: Optional[asyncio.Event] = None
 
 async def run_server(args):
     """Run the Tado Local server."""
-    global bridge_pairing, tado_api, server
+    global bridge_pairing, tado_api, server, shutdown_event
     
-    def handle_signal(sig, frame):
+    shutdown_event = asyncio.Event()
+    
+    def handle_signal(signum, frame):
         """Handle shutdown signals gracefully."""
-        logger.info(f"Received signal {sig}, initiating shutdown...")
+        logger.info(f"Received signal {signum}, initiating immediate shutdown...")
+        shutdown_event.set()
+        
+        # Immediately close SSE streams
+        if tado_api:
+            logger.info("Closing SSE event streams immediately...")
+            if tado_api.event_listeners:
+                for queue in list(tado_api.event_listeners):
+                    try:
+                        queue.put_nowait(None)
+                    except:
+                        pass
+            
+            if tado_api.zone_event_listeners:
+                for queue in list(tado_api.zone_event_listeners):
+                    try:
+                        queue.put_nowait(None)
+                    except:
+                        pass
+        
         if server:
             server.should_exit = True
     
@@ -127,26 +149,27 @@ async def run_server(args):
         if tado_api:
             logger.info("Performing cleanup...")
             
-            # First close all SSE event streams
-            logger.info("Closing SSE event streams...")
-            if tado_api.event_listeners:
-                logger.info(f"Closing {len(tado_api.event_listeners)} event listener queues")
-                for queue in tado_api.event_listeners[:]:  # Copy list to avoid modification during iteration
-                    try:
-                        await queue.put(None)  # Signal end of stream
-                    except:
-                        pass
-            
-            if tado_api.zone_event_listeners:
-                logger.info(f"Closing {len(tado_api.zone_event_listeners)} zone event listener queues")
-                for queue in tado_api.zone_event_listeners[:]:
-                    try:
-                        await queue.put(None)  # Signal end of stream
-                    except:
-                        pass
-            
-            # Give clients a moment to receive the close signal
-            await asyncio.sleep(0.5)
+            # Close all SSE event streams (if not already closed by signal handler)
+            if tado_api.event_listeners or tado_api.zone_event_listeners:
+                logger.info("Closing remaining SSE event streams...")
+                if tado_api.event_listeners:
+                    logger.info(f"Closing {len(tado_api.event_listeners)} event listener queues")
+                    for queue in tado_api.event_listeners[:]:
+                        try:
+                            await queue.put(None)
+                        except:
+                            pass
+                
+                if tado_api.zone_event_listeners:
+                    logger.info(f"Closing {len(tado_api.zone_event_listeners)} zone event listener queues")
+                    for queue in tado_api.zone_event_listeners[:]:
+                        try:
+                            await queue.put(None)
+                        except:
+                            pass
+                
+                # Give clients a moment to receive the close signal
+                await asyncio.sleep(0.3)
             
             # Stop cloud API background sync if running
             if hasattr(tado_api, 'cloud_api') and tado_api.cloud_api:
