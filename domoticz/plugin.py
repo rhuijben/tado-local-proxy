@@ -121,8 +121,10 @@ class BasePlugin:
         for unit in Devices:
             try:
                 device = Devices[unit]
+                Domoticz.Debug(f"Found existing device: Unit {unit}, Name: {device.Name}, DeviceID: {device.DeviceID}")
+                
                 # Check if unit number is valid
-                if unit > 255:
+                if isinstance(unit, int) and unit > 255:
                     Domoticz.Log(f"Found device with invalid unit {unit}: {device.Name} - marking for deletion")
                     devices_to_delete.append(unit)
                 # Try to access device properties to detect corruption
@@ -688,7 +690,7 @@ class BasePlugin:
         This provides a clean hierarchy supporting unlimited zones.
         All zone devices report battery status from the zone's leader thermostat.
         """
-        Domoticz.Debug(f"updateZoneDevice: {zone_name}")
+        Domoticz.Log(f"updateZoneDevice called: zone_id={zone_id}, zone_name='{zone_name}'")
         
         # Safety check - don't create/update devices if we don't have valid state
         if not state:
@@ -721,11 +723,11 @@ class BasePlugin:
             
             # Create temperature + humidity device if needed (Unit X, Sub-unit 1)
             device_key = (unit, temp_subunit)
-            if device_key not in Devices and device_key not in self.device_creation_attempted:
-                Domoticz.Log(f"Creating temperature sensor for zone: {zone_name} (Unit {unit}, Sub-unit {temp_subunit})")
+            if device_key not in self.device_creation_attempted:
                 self.device_creation_attempted.add(device_key)
                 
                 try:
+                    # Try to create - will fail silently if already exists
                     Domoticz.Device(
                         Name=f"{zone_name}",
                         Unit=unit,
@@ -733,15 +735,16 @@ class BasePlugin:
                         TypeName="Temp+Hum",
                         Used=1 if self.auto_enable_devices else 0
                     ).Create()
-                    Domoticz.Debug(f"Successfully created temp sensor for {zone_name}")
+                    Domoticz.Log(f"Created temperature sensor for zone: {zone_name} (Unit {unit}, Sub-unit {temp_subunit})")
                 except Exception as e:
-                    # Device might already exist - this is not fatal
-                    Domoticz.Debug(f"Device ({unit}:{temp_subunit}) already exists or creation failed: {e}")
+                    # Device already exists - this is normal and not an error
+                    Domoticz.Debug(f"Temp sensor ({unit}:{temp_subunit}) for {zone_name} already exists")
+            else:
+                Domoticz.Debug(f"Skipping temp sensor for {zone_name} - already attempted in this session")
             
             # Create thermostat setpoint device if needed (Unit X, Sub-unit 2)
             device_key = (unit, setpoint_subunit)
-            if device_key not in Devices and device_key not in self.device_creation_attempted:
-                Domoticz.Log(f"Creating thermostat for zone: {zone_name} (Unit {unit}, Sub-unit {setpoint_subunit})")
+            if device_key not in self.device_creation_attempted:
                 self.device_creation_attempted.add(device_key)
                 
                 try:
@@ -755,14 +758,15 @@ class BasePlugin:
                         Used=1 if self.auto_enable_devices else 0
                     ).Create()
                     
-                    Domoticz.Log(f"Created thermostat setpoint for {zone_name} - Unit {unit}, Sub-unit {setpoint_subunit}")
+                    Domoticz.Log(f"Created thermostat for zone: {zone_name} (Unit {unit}, Sub-unit {setpoint_subunit})")
                 except Exception as e:
-                    Domoticz.Debug(f"Device ({unit}:{setpoint_subunit}) already exists or creation failed: {e}")
+                    Domoticz.Debug(f"Thermostat ({unit}:{setpoint_subunit}) for {zone_name} already exists")
+            else:
+                Domoticz.Debug(f"Skipping thermostat for {zone_name} - already attempted")
             
             # Create heating status indicator (Unit X, Sub-unit 3)
             device_key = (unit, heating_subunit)
-            if device_key not in Devices and device_key not in self.device_creation_attempted:
-                Domoticz.Log(f"Creating heating status for zone: {zone_name} (Unit {unit}, Sub-unit {heating_subunit})")
+            if device_key not in self.device_creation_attempted:
                 self.device_creation_attempted.add(device_key)
                 
                 try:
@@ -775,9 +779,11 @@ class BasePlugin:
                         Used=1 if self.auto_enable_devices else 0
                     ).Create()
                     
-                    Domoticz.Log(f"Created heating indicator for {zone_name} - Unit {unit}, Sub-unit {heating_subunit}")
+                    Domoticz.Log(f"Created heating indicator for zone: {zone_name} (Unit {unit}, Sub-unit {heating_subunit})")
                 except Exception as e:
-                    Domoticz.Debug(f"Device ({unit}:{heating_subunit}) already exists or creation failed: {e}")
+                    Domoticz.Debug(f"Heating indicator ({unit}:{heating_subunit}) for {zone_name} already exists")
+            else:
+                Domoticz.Debug(f"Skipping heating indicator for {zone_name} - already attempted")
             
             # Extract state values
             cur_temp = state.get('cur_temp_c')
@@ -887,13 +893,12 @@ class BasePlugin:
             
             # Create temperature + humidity device if needed
             device_key = (unit, subunit)
-            if device_key not in Devices and device_key not in self.device_creation_attempted:
-                # Create device with zone + serial name for identification
-                device_name = f"{zone_name} ({serial_number[-4:]})"
-                Domoticz.Log(f"Creating thermostat sensor: {device_name} (Unit {unit}, Sub-unit {subunit})")
+            if device_key not in self.device_creation_attempted:
                 self.device_creation_attempted.add(device_key)
                 
                 try:
+                    # Create device with zone + serial name for identification
+                    device_name = f"{zone_name} ({serial_number[-4:]})"
                     Domoticz.Device(
                         Name=device_name,
                         Unit=unit,
@@ -901,9 +906,11 @@ class BasePlugin:
                         TypeName="Temp+Hum",
                         Used=1 if self.auto_enable_devices else 0
                     ).Create()
-                    Domoticz.Debug(f"Successfully created thermostat sensor for {device_name}")
+                    Domoticz.Log(f"Created thermostat sensor: {device_name} (Unit {unit}, Sub-unit {subunit})")
                 except Exception as e:
-                    Domoticz.Debug(f"Device ({unit}:{subunit}) already exists or creation failed: {e}")
+                    Domoticz.Debug(f"Thermostat sensor ({unit}:{subunit}) already exists")
+            else:
+                Domoticz.Debug(f"Skipping thermostat sensor ({unit}:{subunit}) - already attempted")
             
             # Extract state values
             cur_temp = state.get('cur_temp_c')
