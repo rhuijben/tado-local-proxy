@@ -93,11 +93,14 @@ The plugin supports optional API key authentication using Bearer tokens. This is
 - Basic access control (not cryptographically secure over HTTP)
 
 **To enable authentication:**
-1. Configure an API key in your Tado Local REST API (see API documentation)
-2. Enter the same key in the plugin's "API Key" field
+1. Configure one or more API keys in your Tado Local REST API (see main README)
+   ```bash
+   export TADO_API_KEYS="key-for-domoticz key-for-other-client"
+   ```
+2. Enter one of the configured keys in the plugin's "API Key" field
 3. The plugin will send `Authorization: Bearer <your-key>` with all requests
 
-**Note:** The web UI and other unauthenticated endpoints remain accessible for easy management.
+**Note:** The server can accept multiple API keys (space-separated in `TADO_API_KEYS`), but each client only needs to know one key. The web UI (`/` and `/static/*`) remains accessible without authentication.
 
 ## How It Works
 
