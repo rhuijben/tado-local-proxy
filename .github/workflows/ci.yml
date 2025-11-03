@@ -72,8 +72,9 @@ jobs:
         python -c "from tado_local import __version__"
         python -c "from tado_local.api import TadoLocalAPI"
         python -c "from tado_local.bridge import TadoBridge"
-        python -c "from tado_local.state import TadoStateManager"
-        python -c "from tado_local.database import Database"
+        python -c "from tado_local.state import DeviceStateManager"
+        python -c "from tado_local.cloud import TadoCloudAPI"
+        python -c "from tado_local.cache import CharacteristicCacheSQLite"
 
   lint:
     name: Code Quality Checks
