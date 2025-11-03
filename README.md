@@ -1,25 +1,29 @@
 # Tado Local
 
-**Control your Tado smart thermostats locally** - No cloud dependencies, no rate limits, instant response times.
+**A REST API backend for local Tado thermostat control** - No cloud dependencies, no rate limits, instant response times.
 
+[![CI](https://github.com/ampscm/TadoLocal/actions/workflows/ci.yml/badge.svg)](https://github.com/ampscm/TadoLocal/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 
 ## 🎯 What is Tado Local?
 
-Tado Local is a lightweight bridge that connects your Tado smart heating system directly to your home automation setup. It provides:
+Tado Local is a **REST API backend** that connects your Tado smart heating system directly to your home automation platform. It serves as the common integration layer for multiple smart home systems.
 
-- **🏠 Web UI** - Control interface for managing zones and viewing history
-- **📊 Visual History** - Charts showing temperature, humidity, and heating patterns over time
-- **⚡ REST API** - Integration endpoint for any smart home platform (Domoticz, Home Assistant, openHAB, etc.)
-- **🔄 Real-time Updates** - Server-Sent Events for instant state changes
-- **💾 Local Storage** - SQLite database keeping all data on your network
+### Core Features
+
+- **⚡ REST API** - Clean HTTP endpoints for any integration (Domoticz, Home Assistant, openHAB, Node-RED, etc.)
+- **🔄 Real-time Updates** - Server-Sent Events (SSE) stream for instant state changes
+- **💾 Local Storage** - SQLite database with complete state history (10-second resolution)
+- **🔌 Direct Local Control** - HomeKit protocol communication with your Tado bridge - no cloud required
+- **📊 Setup & Debug UI** - Web interface for initial configuration and troubleshooting
+- **🔧 Interactive API Docs** - Built-in Swagger UI at `/docs`
 
 ### Why Choose Local Control?
 
 Tado's cloud API has strict rate limits that can break home automation integrations. Traditional solutions require running full Home Assistant instances just to access one device. 
 
-**Tado Local changes that.** Using the HomeKit protocol built into your Tado bridge, this tool provides fast, reliable, local access with a simple REST API that works with any platform.
+**Tado Local changes that.** Using the HomeKit protocol built into your Tado bridge, this tool provides a fast, reliable REST API backend that works with any platform. Set it up once, integrate everywhere.
 
 ---
 
