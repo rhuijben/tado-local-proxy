@@ -103,7 +103,7 @@ class BasePlugin:
         # Get parameters
         self.api_url = Parameters["Address"].rstrip('/')
         self.retry_interval = int(Parameters["Mode1"])
-        self.auto_enable_devices = (Parameters.get("Mode2", "1") == "1")
+        self.auto_enable_devices = (Parameters.get("Mode2", "true") == "true")
         self.api_key = Parameters.get("Mode3", "").strip()
         
         # Set debug mode
