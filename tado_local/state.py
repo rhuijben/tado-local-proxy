@@ -25,7 +25,7 @@ logger = logging.getLogger('tado-local')
 
 class DeviceStateManager:
     """Manages device state tracking, history, and change detection."""
-    
+
     # HomeKit characteristic UUIDs we care about
     # Temperature & HVAC
     CHAR_CURRENT_TEMPERATURE = '00000011-0000-1000-8000-0026bb765291'
@@ -35,25 +35,25 @@ class DeviceStateManager:
     CHAR_HEATING_THRESHOLD = '00000012-0000-1000-8000-0026bb765291'
     CHAR_COOLING_THRESHOLD = '0000000d-0000-1000-8000-0026bb765291'
     CHAR_TEMP_DISPLAY_UNITS = '00000036-0000-1000-8000-0026bb765291'
-    
+
     # Humidity
     CHAR_CURRENT_HUMIDITY = '00000010-0000-1000-8000-0026bb765291'
     CHAR_TARGET_HUMIDITY = '00000034-0000-1000-8000-0026bb765291'
-    
+
     # Battery
     CHAR_BATTERY_LEVEL = '00000068-0000-1000-8000-0026bb765291'
     CHAR_STATUS_LOW_BATTERY = '00000079-0000-1000-8000-0026bb765291'
-    
+
     # Active state (for heaters, coolers, etc.)
     CHAR_ACTIVE = '000000b0-0000-1000-8000-0026bb765291'
-    
+
     # Valve position (for radiator controls)
     CHAR_VALVE_POSITION = '0000004f-0000-1000-8000-0026bb765291'
-    
+
     # Water heater specific
     CHAR_CURRENT_WATER_TEMPERATURE = '00000011-0000-1000-8000-0026bb765291'  # Same as current temp
     CHAR_TARGET_WATER_TEMPERATURE = '00000035-0000-1000-8000-0026bb765291'  # Same as target temp
-    
+
     def __init__(self, db_path: str):
         self.db_path = db_path
         self.device_id_cache: Dict[str, int] = {}  # serial_number -> device_id
@@ -67,11 +67,11 @@ class DeviceStateManager:
         self._load_device_cache()
         self._load_zone_cache()
         self._load_latest_state_from_db()
-    
+
     def _ensure_schema(self):
         """Ensure the device tables exist in the database."""
         conn = sqlite3.connect(self.db_path)
-        
+
         # Create zones table first WITHOUT foreign key (to avoid circular dependency)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS zones (
@@ -84,7 +84,7 @@ class DeviceStateManager:
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_zones_order ON zones(order_id)")
-        
+
         # Create devices table with zone_id column
         conn.execute("""
             CREATE TABLE IF NOT EXISTS devices (
@@ -103,7 +103,7 @@ class DeviceStateManager:
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_devices_serial ON devices(serial_number)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_devices_zone ON devices(zone_id)")
-        
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS device_state_history (
                 device_id INTEGER NOT NULL,
@@ -127,15 +127,15 @@ class DeviceStateManager:
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_history_device_time ON device_state_history(device_id, timestamp_bucket DESC)")
-        
+
         conn.commit()
         conn.close()
-    
+
     def _load_device_cache(self):
         """Load device ID mappings and info from database."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.execute("""
-            SELECT d.device_id, d.serial_number, d.aid, d.name, d.device_type, 
+            SELECT d.device_id, d.serial_number, d.aid, d.name, d.device_type,
                    d.zone_id, z.name as zone_name, d.is_zone_leader, d.is_circuit_driver, d.battery_state
             FROM devices d
             LEFT JOIN zones z ON d.zone_id = z.zone_id
@@ -157,7 +157,7 @@ class DeviceStateManager:
             }
         conn.close()
         logger.info(f"Loaded {len(self.device_id_cache)} devices from cache")
-    
+
     def _load_zone_cache(self):
         """Load zone information into memory cache."""
         conn = sqlite3.connect(self.db_path)
@@ -169,7 +169,7 @@ class DeviceStateManager:
             LEFT JOIN devices d ON z.leader_device_id = d.device_id
             ORDER BY z.order_id, z.name
         """)
-        
+
         for zone_id, name, leader_device_id, order_id, leader_serial, leader_type, is_circuit_driver in cursor.fetchall():
             self.zone_cache[zone_id] = {
                 'zone_id': zone_id,
@@ -180,14 +180,14 @@ class DeviceStateManager:
                 'leader_type': leader_type,
                 'is_circuit_driver': bool(is_circuit_driver)
             }
-        
+
         conn.close()
         logger.info(f"Loaded {len(self.zone_cache)} zones from cache")
-    
+
     def _load_latest_state_from_db(self):
         """Load the most recent state for each device from the database to avoid duplicate saves on startup."""
         conn = sqlite3.connect(self.db_path)
-        
+
         # Get the most recent state for each device
         cursor = conn.execute("""
             SELECT device_id, timestamp_bucket,
@@ -203,11 +203,11 @@ class DeviceStateManager:
                 GROUP BY device_id
             )
         """)
-        
+
         for row in cursor.fetchall():
             device_id = row[0]
             timestamp_bucket = row[1]
-            
+
             # Populate current_state with the last known values
             self.current_state[device_id] = {
                 'current_temperature': row[2],
@@ -224,33 +224,33 @@ class DeviceStateManager:
                 'active_state': row[13],
                 'valve_position': row[14],
             }
-            
+
             # Set the last saved bucket
             self.last_saved_bucket[device_id] = timestamp_bucket
-            
+
             # Set the snapshot to match what we just loaded
             self.bucket_state_snapshot[device_id] = self.current_state[device_id].copy()
-        
+
         conn.close()
         logger.info(f"Loaded latest state for {len(self.current_state)} devices from database")
-    
+
     def get_device_info(self, device_id: int) -> Dict[str, Any]:
         """Get cached device info including zone name, aid, etc."""
         return self.device_info_cache.get(device_id, {})
-    
+
     def get_device_id_by_aid(self, aid: int) -> Optional[int]:
         """Get device_id from HomeKit accessory ID (aid)."""
         return self.aid_to_device_id.get(aid)
-    
+
     def get_or_create_device(self, serial_number: str, aid: int, accessory_data: dict) -> int:
         """Get or create device ID for a serial number, updating aid if needed."""
         if serial_number in self.device_id_cache:
             device_id = self.device_id_cache[serial_number]
-            
+
             # Update aid if it's not set or has changed
             device_info = self.device_info_cache.get(device_id, {})
             current_aid = device_info.get('aid')
-            
+
             if current_aid != aid:
                 logger.info(f"Updating aid for device {device_id} ({serial_number}): {current_aid} -> {aid}")
                 conn = sqlite3.connect(self.db_path)
@@ -259,21 +259,21 @@ class DeviceStateManager:
                 """, (aid, device_id))
                 conn.commit()
                 conn.close()
-                
+
                 # Update caches
                 if aid:
                     self.aid_to_device_id[aid] = device_id
                 if device_info:
                     device_info['aid'] = aid
-            
+
             return device_id
-        
+
         # Extract device info from accessory data
         device_type = "unknown"
         name = None
         model = None
         manufacturer = None
-        
+
         for service in accessory_data.get('services', []):
             # AccessoryInformation service
             if service.get('type') == '0000003e-0000-1000-8000-0026bb765291':
@@ -286,7 +286,7 @@ class DeviceStateManager:
                         model = value
                     elif char_type == '00000020-0000-1000-8000-0026bb765291':  # Manufacturer
                         manufacturer = value
-            
+
             # Determine device type from services
             service_type = service.get('type', '').lower()
             if service_type == '0000004a-0000-1000-8000-0026bb765291':
@@ -295,7 +295,7 @@ class DeviceStateManager:
                 device_type = "temperature_sensor"
             elif service_type == '00000082-0000-1000-8000-0026bb765291':
                 device_type = "humidity_sensor"
-        
+
         # If device type still unknown, detect from serial number prefix
         # Based on Tado Cloud API device types: IB01, RU02, VA02, etc.
         if device_type == "unknown" and serial_number:
@@ -308,7 +308,7 @@ class DeviceStateManager:
                 device_type = "radiator_valve"  # Smart Radiator Thermostat
             elif prefix == "WR":
                 device_type = "wireless_receiver"  # Extension Kit
-        
+
         # Create device entry
         conn = sqlite3.connect(self.db_path)
         cursor = conn.execute("""
@@ -317,7 +317,7 @@ class DeviceStateManager:
         """, (serial_number, aid, device_type, name, model, manufacturer))
         device_id = cursor.lastrowid
         conn.commit()
-        
+
         # Get zone_name and is_zone_leader if device has a zone assigned
         zone_cursor = conn.execute("""
             SELECT z.name, d.is_zone_leader
@@ -328,9 +328,9 @@ class DeviceStateManager:
         zone_row = zone_cursor.fetchone()
         zone_name = zone_row[0] if zone_row else None
         is_zone_leader = bool(zone_row[1]) if zone_row and zone_row[1] is not None else False
-        
+
         conn.close()
-        
+
         # Update both caches
         self.device_id_cache[serial_number] = device_id
         if aid:
@@ -344,14 +344,14 @@ class DeviceStateManager:
             'is_zone_leader': is_zone_leader
         }
         logger.info(f"Created device {device_id} for {serial_number} ({name})")
-        
+
         return device_id
-    
+
     def update_device_characteristic(self, device_id: int, char_type: str, value: Any, timestamp: float):
         """Update a single characteristic for a device."""
         if device_id not in self.current_state:
             self.current_state[device_id] = {}
-        
+
         # Map characteristic to state field
         char_mapping = {
             self.CHAR_CURRENT_TEMPERATURE: 'current_temperature',
@@ -368,68 +368,68 @@ class DeviceStateManager:
             self.CHAR_ACTIVE: 'active_state',
             self.CHAR_VALVE_POSITION: 'valve_position',
         }
-        
+
         field_name = char_mapping.get(char_type.lower())
         if field_name:
             old_value = self.current_state[device_id].get(field_name)
-            
+
             # Only update if value actually changed
             if old_value == value:
                 return None, None, None  # No change
-            
+
             self.current_state[device_id][field_name] = value
             self.current_state[device_id]['last_update'] = timestamp
-            
+
             # Check if we need to save to history
             current_bucket = self._get_timestamp_bucket(timestamp)
             last_bucket = self.last_saved_bucket.get(device_id)
-            
+
             # Save if: new bucket OR state changed within same bucket
             if last_bucket != current_bucket or self._has_state_changed(device_id):
                 self._save_to_history(device_id, timestamp)
-            
+
             return field_name, old_value, value
-        
+
         return None, None, None
-    
+
     def _has_state_changed(self, device_id: int) -> bool:
         """Check if current state differs from last saved snapshot."""
         if device_id not in self.bucket_state_snapshot:
             return True  # No snapshot yet, definitely changed
-        
+
         current = self.current_state.get(device_id, {})
         snapshot = self.bucket_state_snapshot.get(device_id, {})
-        
+
         # Compare only the data fields, not metadata like 'last_update'
         data_fields = [
             'current_temperature', 'target_temperature',
             'current_heating_cooling_state', 'target_heating_cooling_state',
             'heating_threshold_temperature', 'cooling_threshold_temperature',
-            'temperature_display_units', 'battery_level', 'status_low_battery', 
+            'temperature_display_units', 'battery_level', 'status_low_battery',
             'humidity', 'target_humidity', 'active_state', 'valve_position'
         ]
-        
+
         for field in data_fields:
             if current.get(field) != snapshot.get(field):
                 return True
-        
+
         return False
-    
+
     def _get_timestamp_bucket(self, timestamp: float) -> str:
         """Convert timestamp to 10-second bucket (format: YYYYMMDDHHMMSSx where x is 0-5)."""
         dt = datetime.datetime.fromtimestamp(timestamp)
         # Round down to 10-second interval
         second = (dt.second // 10) * 10
         return dt.strftime(f'%Y%m%d%H%M{second:02d}')
-    
+
     def _save_to_history(self, device_id: int, timestamp: float):
         """Save current state to history table using 10-second bucket."""
         if device_id not in self.current_state:
             return
-        
+
         state = self.current_state[device_id]
         bucket = self._get_timestamp_bucket(timestamp)
-        
+
         conn = sqlite3.connect(self.db_path)
         conn.execute("""
             INSERT INTO device_state_history (
@@ -437,7 +437,7 @@ class DeviceStateManager:
                 current_temperature, target_temperature,
                 current_heating_cooling_state, target_heating_cooling_state,
                 heating_threshold_temperature, cooling_threshold_temperature,
-                temperature_display_units, battery_level, status_low_battery, 
+                temperature_display_units, battery_level, status_low_battery,
                 humidity, target_humidity, active_state, valve_position
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(device_id, timestamp_bucket) DO UPDATE SET
@@ -473,7 +473,7 @@ class DeviceStateManager:
         ))
         conn.commit()
         conn.close()
-        
+
         # Update tracking: remember this bucket and state snapshot
         self.last_saved_bucket[device_id] = bucket
         self.bucket_state_snapshot[device_id] = {
@@ -491,13 +491,13 @@ class DeviceStateManager:
             'active_state': state.get('active_state'),
             'valve_position': state.get('valve_position'),
         }
-        
+
         logger.debug(f"Saved device {device_id} state to history bucket {bucket}")
-    
+
     def get_device_history(self, device_id: int, start_time: float = None, end_time: float = None, limit: int = 100, offset: int = 0) -> List[Dict]:
         """Get device state history with standardized format."""
         conn = sqlite3.connect(self.db_path)
-        
+
         query = """
             SELECT current_temperature, target_temperature,
                    current_heating_cooling_state, target_heating_cooling_state,
@@ -508,26 +508,26 @@ class DeviceStateManager:
             WHERE device_id = ?
         """
         params = [device_id]
-        
+
         if start_time:
             query += " AND timestamp_bucket >= ?"
             params.append(self._get_timestamp_bucket(start_time))
-        
+
         if end_time:
             query += " AND timestamp_bucket <= ?"
             params.append(self._get_timestamp_bucket(end_time))
-        
+
         query += " ORDER BY timestamp_bucket DESC LIMIT ? OFFSET ?"
         params.append(limit)
         params.append(offset)
-        
+
         cursor = conn.execute(query, params)
-        
+
         history = []
         for row in cursor.fetchall():
             cur_temp_c = row[0]
             target_temp_c = row[1]
-            
+
             # Build standardized state format (same as /devices, /zones, /events)
             record = {
                 'state': {
@@ -544,17 +544,17 @@ class DeviceStateManager:
                 'timestamp': row[11]  # updated_at (last update time in bucket)
             }
             history.append(record)
-        
+
         conn.close()
-        
+
         return history
-    
+
     def get_current_state(self, device_id: int = None) -> Dict:
         """Get current state for one or all devices."""
         if device_id is not None:
             return self.current_state.get(device_id, {})
         return self.current_state
-    
+
     def get_all_devices(self) -> List[Dict]:
         """Get all registered devices."""
         conn = sqlite3.connect(self.db_path)

@@ -76,7 +76,7 @@ from typing import Dict, Any, Optional
 
 class BasePlugin:
     """Tado Local plugin for Domoticz"""
-    
+
     def __init__(self):
         self.api_url = ""
         self.retry_interval = 30
@@ -95,21 +95,21 @@ class BasePlugin:
         self.thermostats_fetched = False
         self.sse_buffer = ""  # Buffer for accumulating SSE data
         self.device_creation_attempted = set()  # Track which devices we've tried to create
-    
+
     def onStart(self):
         """Domoticz calls this when the plugin is started"""
         Domoticz.Debug("onStart called")
-        
+
         # Get parameters
         self.api_url = Parameters["Address"].rstrip('/')
         self.retry_interval = int(Parameters["Mode1"])
         self.auto_enable_devices = (Parameters.get("Mode2", "true") == "true")
         self.api_key = Parameters.get("Mode3", "").strip()
-        
+
         # Set debug mode
         if Parameters["Mode6"] == "Debug":
             Domoticz.Debugging(1)
-        
+
         Domoticz.Log(f"Tado Local Plugin started - API: {self.api_url}")
         Domoticz.Log(f"Retry interval: {self.retry_interval} seconds")
         Domoticz.Log(f"Auto-enable devices: {'Yes' if self.auto_enable_devices else 'No'}")
@@ -117,17 +117,17 @@ class BasePlugin:
             Domoticz.Log("API Key configured (authentication enabled)")
         else:
             Domoticz.Log("No API Key configured (authentication disabled)")
-        
+
         # Clean up any devices with invalid unit numbers (> 255 or corrupt data)
         devices_to_delete = []
         for unit in Devices:
             try:
                 device = Devices[unit]
                 Domoticz.Debug(f"Found existing device: Unit {unit}, Name: {device.Name}")
-                
+
                 # Mark existing units as created to prevent recreation attempts
                 self.device_creation_attempted.add(unit)
-                
+
                 # Check if unit number is valid
                 if isinstance(unit, int) and unit > 255:
                     Domoticz.Log(f"Found device with invalid unit {unit}: {device.Name} - marking for deletion")
@@ -138,7 +138,7 @@ class BasePlugin:
             except Exception as e:
                 Domoticz.Error(f"Device {unit} is corrupted: {e} - marking for deletion")
                 devices_to_delete.append(unit)
-        
+
         # Delete problematic devices
         for unit in devices_to_delete:
             try:
@@ -146,29 +146,29 @@ class BasePlugin:
                 Devices[unit].Delete()
             except Exception as e:
                 Domoticz.Error(f"Failed to delete device {unit}: {e}")
-        
+
         if devices_to_delete:
             Domoticz.Log(f"Cleaned up {len(devices_to_delete)} invalid devices")
-        
+
         Domoticz.Log(f"Found {len(self.device_creation_attempted)} existing devices")
-        
+
         # Set heartbeat to 30 seconds (reduced from 10)
         Domoticz.Heartbeat(30)
-        
+
         # Don't start connection immediately - wait for first heartbeat
         # This ensures Domoticz completes initialization first
         Domoticz.Log("Will connect to API on first heartbeat...")
-    
+
     def getAuthHeaders(self) -> str:
         """Build Authorization header string if API key is configured"""
         if self.api_key:
             return f"Authorization: Bearer {self.api_key}\r\n"
         return ""
-    
+
     def onStop(self):
         """Domoticz calls this when the plugin is stopped"""
         Domoticz.Debug("onStop called")
-        
+
         # Close SSE connection if open
         if self.sse_connection:
             try:
@@ -176,7 +176,7 @@ class BasePlugin:
             except:
                 pass
             self.sse_connection = None
-        
+
         # Close zones fetch connection if open
         if self.zones_fetch_connection:
             try:
@@ -184,16 +184,16 @@ class BasePlugin:
             except:
                 pass
             self.zones_fetch_connection = None
-        
+
         Domoticz.Log("Tado Local Plugin stopped")
-    
+
     def onConnect(self, Connection, Status, Description):
         """Domoticz calls this when a connection is made"""
         Domoticz.Debug(f"onConnect: {Connection.Name}, Status: {Status}, Description: {Description}")
-        
+
         if Status == 0:
             Domoticz.Debug(f"Connected successfully to {Connection.Name}")
-            
+
             if Connection == self.zones_fetch_connection:
                 # Zones fetch connection established, send GET request
                 Domoticz.Debug("Sending GET request for /zones")
@@ -203,14 +203,14 @@ class BasePlugin:
                 }
                 if self.api_key:
                     headers['Authorization'] = f'Bearer {self.api_key}'
-                
+
                 sendData = {
                     'Verb': 'GET',
                     'URL': '/zones',
                     'Headers': headers
                 }
                 Connection.Send(sendData)
-            
+
             elif Connection == self.thermostats_fetch_connection:
                 # Thermostats fetch connection established, send GET request
                 Domoticz.Debug("Sending GET request for /thermostats")
@@ -220,18 +220,18 @@ class BasePlugin:
                 }
                 if self.api_key:
                     headers['Authorization'] = f'Bearer {self.api_key}'
-                
+
                 sendData = {
                     'Verb': 'GET',
                     'URL': '/thermostats',
                     'Headers': headers
                 }
                 Connection.Send(sendData)
-            
+
             elif Connection == self.sse_connection:
                 # SSE connection established, send raw HTTP request
                 Domoticz.Debug("Sending SSE request for /events with zone+device types and 5-minute refresh")
-                
+
                 # Build raw HTTP GET request with types=zone,device and refresh_interval=300 (5 minutes)
                 # This ensures Domoticz gets both zone and device updates for non-leader thermostats
                 auth_header = self.getAuthHeaders()
@@ -245,10 +245,10 @@ class BasePlugin:
                     f"{auth_header}"
                     "\r\n"
                 )
-                
+
                 Connection.Send(request.encode('utf-8'))
                 self.is_connecting = False
-            
+
             else:
                 # Check if this is a control connection
                 if Connection in self.control_connections:
@@ -268,11 +268,11 @@ class BasePlugin:
             elif Connection in self.control_connections:
                 # Clean up failed control connection
                 del self.control_connections[Connection]
-    
+
     def onMessage(self, Connection, Data):
         """Domoticz calls this when data is received"""
         Domoticz.Debug(f"onMessage called from {Connection.Name}")
-        
+
         try:
             # Handle control connection responses
             if Connection in self.control_connections:
@@ -290,7 +290,7 @@ class BasePlugin:
                 # Don't explicitly disconnect - let Domoticz handle cleanup
                 # The Connection: close header should close it automatically
                 return
-            
+
             # Handle raw SSE data (from raw TCP connection)
             if Connection == self.sse_connection:
                 # Decode bytes to string
@@ -300,12 +300,12 @@ class BasePlugin:
                     raw_data = Data.decode('utf-8', errors='ignore')
                 else:
                     raw_data = str(Data)
-                
+
                 Domoticz.Debug(f"SSE raw data: {len(raw_data)} bytes")
-                
+
                 # Add to buffer
                 self.sse_buffer += raw_data
-                
+
                 # Process complete SSE messages from buffer
                 # SSE format: "data: {json}\n\n"
                 # Chunked encoding adds: "<hex-size>\r\ndata...\r\n"
@@ -314,7 +314,7 @@ class BasePlugin:
                     data_start = self.sse_buffer.find('data: ')
                     if data_start == -1:
                         break
-                    
+
                     # Find end of this SSE message (\n\n or \r\n\r\n)
                     data_end = self.sse_buffer.find('\n\n', data_start)
                     if data_end == -1:
@@ -324,15 +324,15 @@ class BasePlugin:
                         data_end += 4  # Include \r\n\r\n
                     else:
                         data_end += 2  # Include \n\n
-                    
+
                     # Extract the complete SSE message
                     sse_message = self.sse_buffer[data_start:data_end]
                     self.sse_buffer = self.sse_buffer[data_end:]  # Remove processed part
-                    
+
                     # Parse the SSE message
                     for line in sse_message.split('\n'):
                         line = line.strip()
-                        
+
                         if line.startswith('data: '):
                             json_str = line[6:]  # Remove "data: " prefix
                             try:
@@ -340,57 +340,57 @@ class BasePlugin:
                                 self.handleEvent(event_data)
                             except json.JSONDecodeError as e:
                                 Domoticz.Debug(f"Failed to parse JSON: {e} - Data: {json_str}")
-                
+
                 # Keep buffer size reasonable (max 10KB)
                 if len(self.sse_buffer) > 10240:
                     Domoticz.Debug(f"SSE buffer too large ({len(self.sse_buffer)} bytes), clearing old data")
                     # Keep only last 1KB
                     self.sse_buffer = self.sse_buffer[-1024:]
-                
+
                 return  # Early return for SSE connection
-            
+
             # Check if this is HTTP response data (for zones fetch)
             if 'Status' in Data:
                 status = int(Data['Status'])
                 Domoticz.Debug(f"HTTP Status: {status}")
-                
+
                 if status != 200:
                     Domoticz.Error(f"HTTP Error {status}: {Data.get('Data', b'').decode('utf-8', errors='ignore')}")
                     return
-            
+
             # Handle zones fetch response (JSON)
             if Connection == self.zones_fetch_connection and 'Data' in Data:
                 raw_data = Data['Data'].decode('utf-8', errors='ignore')
                 Domoticz.Debug(f"Received zones data: {len(raw_data)} bytes")
-                
+
                 try:
                     # Parse JSON response
                     zones_response = json.loads(raw_data)
                     zones = zones_response.get('zones', [])
-                    
+
                     Domoticz.Log(f"Fetched {len(zones)} zones from API")
-                    
+
                     # Create devices for each zone
                     for zone in zones:
                         zone_id = zone.get('zone_id')
                         zone_name = zone.get('name')
                         state = zone.get('state', {})
-                        
+
                         if zone_id and zone_name:
                             self.updateZoneDevice(zone_id, zone_name, state)
-                    
+
                     self.zones_fetched = True
-                    
+
                     # Close zones fetch connection
                     Connection.Disconnect()
                     self.zones_fetch_connection = None
-                    
+
                     # Now fetch thermostats for non-leader devices
                     url_parts = self.api_url.replace('http://', '').replace('https://', '').split(':')
                     host = url_parts[0]
                     port = int(url_parts[1]) if len(url_parts) > 1 else 8000
                     use_ssl = 'https://' in self.api_url
-                    
+
                     Domoticz.Log("Fetching thermostats from API...")
                     self.thermostats_fetch_connection = Domoticz.Connection(
                         Name="Thermostats Fetch",
@@ -400,25 +400,25 @@ class BasePlugin:
                         Port=str(port)
                     )
                     self.thermostats_fetch_connection.Connect()
-                    
+
                 except json.JSONDecodeError as e:
                     Domoticz.Error(f"Failed to parse zones JSON: {e}")
                     Connection.Disconnect()
                     self.zones_fetch_connection = None
                     return
-            
+
             # Handle thermostats fetch response (JSON)
             if Connection == self.thermostats_fetch_connection and 'Data' in Data:
                 raw_data = Data['Data'].decode('utf-8', errors='ignore')
                 Domoticz.Debug(f"Received thermostats data: {len(raw_data)} bytes")
-                
+
                 try:
                     # Parse JSON response
                     thermostats_response = json.loads(raw_data)
                     thermostats = thermostats_response.get('thermostats', [])
-                    
+
                     Domoticz.Log(f"Fetched {len(thermostats)} thermostats from API")
-                    
+
                     # Create devices for non-leader thermostats
                     for thermostat in thermostats:
                         device_id = thermostat.get('device_id')
@@ -427,7 +427,7 @@ class BasePlugin:
                         serial_number = thermostat.get('serial_number', '')
                         is_zone_leader = thermostat.get('is_zone_leader', False)
                         state = thermostat.get('state', {})
-                        
+
                         if device_id:
                             # Cache thermostat info including zone_id
                             self.thermostats_cache[device_id] = {
@@ -437,7 +437,7 @@ class BasePlugin:
                                 'is_zone_leader': is_zone_leader,
                                 'last_update': time.time()
                             }
-                            
+
                             # Only create sensors for non-leader thermostats
                             # Zone leaders are already represented by the main zone device
                             if not is_zone_leader and zone_id:
@@ -460,57 +460,61 @@ class BasePlugin:
                                     Domoticz.Debug(f"Ignoring additional thermostat beyond first: {zone_name} ({serial_number[-4:]}) - device_id {device_id}")
                             else:
                                 Domoticz.Debug(f"Skipping zone leader: {zone_name} ({serial_number[-4:]})")
-                    
+
                     self.thermostats_fetched = True
-                    
+
                     # Close thermostats fetch connection
                     Connection.Disconnect()
                     self.thermostats_fetch_connection = None
-                    
+
                     # Now connect to SSE
                     url_parts = self.api_url.replace('http://', '').replace('https://', '').split(':')
                     host = url_parts[0]
                     port = int(url_parts[1]) if len(url_parts) > 1 else 8000
                     self.connectSSE(host, port, False)
-                    
+
                 except json.JSONDecodeError as e:
                     Domoticz.Error(f"Failed to parse zones JSON: {e}")
                     Connection.Disconnect()
                     self.zones_fetch_connection = None
                     return
-        
+
         except Exception as e:
             Domoticz.Error(f"Error in onMessage: {e}")
-    
+
     def onCommand(self, Unit, Command, Level, Hue):
         """Domoticz calls this when a device is controlled"""
         Domoticz.Log(f"onCommand: Unit={Unit}, Command={Command}, Level={Level}")
-        
+
         try:
             # Find the zone_id for this thermostat unit
             # Thermostat is at position 2 in each zone's 5-unit block
             # Unit 2 → Zone 1, Unit 7 → Zone 2, Unit 12 → Zone 3, etc.
             # Formula: zone_id = ((unit - 2) // 5) + 1
-            
+
             zone_id = None
             for zid, zone_data in self.zones_cache.items():
                 if zone_data.get('thermostat_unit') == Unit:
                     zone_id = zid
                     break
-            
+
             if zone_id is None:
                 Domoticz.Debug(f"Unit {Unit} is not a thermostat device")
                 return
-            
+
             zone_name = self.zones_cache[zone_id]['name']
             Domoticz.Log(f"Processing command for zone: {zone_name} (ID: {zone_id})")
-            
+
             # Handle thermostat setpoint changes
             if Command == "Set Level":
                 target_temp = float(Level)
                 if target_temp == 0:
                     Domoticz.Log(f"Turning off {zone_name}")
                     self.controlZone(zone_id, heating_enabled=False)
+                elif target_temp < 0:
+                    # Negative value = resume schedule/enable without changing temperature
+                    Domoticz.Log(f"Resuming schedule for {zone_name} (enable heating)")
+                    self.controlZone(zone_id, heating_enabled=True)
                 else:
                     Domoticz.Log(f"Setting {zone_name} to {target_temp}°C")
                     self.controlZone(zone_id, target_temperature=target_temp, heating_enabled=True)
@@ -520,18 +524,18 @@ class BasePlugin:
             elif Command == "On":
                 Domoticz.Log(f"Turning on {zone_name}")
                 self.controlZone(zone_id, heating_enabled=True)
-        
+
         except Exception as e:
             Domoticz.Error(f"Error in onCommand: {e}")
-    
+
     def onNotification(self, Name, Subject, Text, Status, Priority, Sound, ImageFile):
         """Domoticz calls this when a notification is received"""
         Domoticz.Debug(f"onNotification: {Name}, {Subject}, {Text}, {Status}")
-    
+
     def onDisconnect(self, Connection):
         """Domoticz calls this when a connection is closed"""
         Domoticz.Debug(f"onDisconnect: {Connection.Name}")
-        
+
         if Connection == self.sse_connection:
             Domoticz.Log("SSE connection closed - will reconnect on next heartbeat")
             self.sse_connection = None
@@ -539,12 +543,12 @@ class BasePlugin:
         elif Connection == self.zones_fetch_connection:
             Domoticz.Debug("Zones fetch connection closed")
             self.zones_fetch_connection = None
-    
+
     def onHeartbeat(self):
         """Domoticz calls this every heartbeat interval"""
         Domoticz.Debug("onHeartbeat called")
         self.heartbeat_counter += 1
-        
+
         # Check if we need to reconnect
         if self.sse_connection is None and not self.is_connecting:
             # Check if enough time has passed since last attempt
@@ -552,41 +556,41 @@ class BasePlugin:
             if current_time - self.last_connection_attempt >= self.retry_interval:
                 Domoticz.Log("Reconnecting to SSE stream...")
                 self.fetchZonesAndConnect()
-        
+
         # No need to poll - the SSE connection with types=zone,device and refresh_interval=300
         # provides both real-time events and periodic refresh updates for all devices
-        
+
         # Send keepalive debug message every 10 heartbeats (5 minutes with 30s interval)
         if self.sse_connection and self.heartbeat_counter % 10 == 0:
             Domoticz.Debug("Connection still active")
-    
+
     def fetchZonesAndConnect(self):
         """Fetch zones and thermostats from API and establish SSE connection"""
         Domoticz.Debug("fetchZonesAndConnect called")
         self.last_connection_attempt = time.time()
         self.zones_fetched = False
         self.thermostats_fetched = False
-        
+
         try:
             # Parse API URL
             url_parts = self.api_url.replace('http://', '').replace('https://', '').split(':')
             host = url_parts[0]
             port = int(url_parts[1]) if len(url_parts) > 1 else 8000
             use_ssl = 'https://' in self.api_url
-            
+
             # Close existing connections
             if self.zones_fetch_connection:
                 try:
                     self.zones_fetch_connection.Disconnect()
                 except:
                     pass
-            
+
             if self.thermostats_fetch_connection:
                 try:
                     self.thermostats_fetch_connection.Disconnect()
                 except:
                     pass
-            
+
             # Create connection for /zones request
             Domoticz.Log("Fetching zones from API...")
             self.zones_fetch_connection = Domoticz.Connection(
@@ -597,24 +601,24 @@ class BasePlugin:
                 Port=str(port)
             )
             self.zones_fetch_connection.Connect()
-            
+
         except Exception as e:
             Domoticz.Error(f"Error in fetchZonesAndConnect: {e}")
-    
+
     def connectSSE(self, host: str, port: int, use_ssl: bool = False):
         """Establish SSE connection to /events/zones"""
         Domoticz.Debug(f"Connecting to SSE stream at {host}:{port}")
-        
+
         try:
             self.is_connecting = True
-            
+
             # Close existing connection if any
             if self.sse_connection:
                 try:
                     self.sse_connection.Disconnect()
                 except:
                     pass
-            
+
             # Create new SSE connection using raw TCP (not HTTP protocol)
             # This allows us to receive streaming data without waiting for response to end
             self.sse_connection = Domoticz.Connection(
@@ -625,61 +629,61 @@ class BasePlugin:
                 Port=str(port)
             )
             self.sse_connection.Connect()
-            
+
         except Exception as e:
             Domoticz.Error(f"Error connecting to SSE: {e}")
             self.is_connecting = False
             self.sse_connection = None
-    
+
     def handleEvent(self, event_data: Dict[str, Any]):
         """Handle incoming SSE event"""
         Domoticz.Debug(f"Received event: {event_data.get('type')}")
-        
+
         try:
             event_type = event_data.get('type')
-            
+
             if event_type == 'keepalive':
                 Domoticz.Debug("Received keepalive")
                 return
-            
+
             if event_type == 'zone':
                 zone_id = event_data.get('zone_id')
                 zone_name = event_data.get('zone_name')
                 state = event_data.get('state', {})
                 is_refresh = event_data.get('refresh', False)
-                
+
                 if is_refresh:
                     Domoticz.Debug(f"Zone refresh update: {zone_name} (ID: {zone_id})")
                 else:
                     Domoticz.Debug(f"Zone update: {zone_name} (ID: {zone_id})")
-                
+
                 # Skip if zones haven't been fetched yet
                 if not self.zones_fetched:
                     Domoticz.Debug(f"Skipping zone event - zones not yet fetched")
                     return
-                
+
                 # Create or update device for this zone
                 self.updateZoneDevice(zone_id, zone_name, state)
-            
+
             elif event_type == 'device':
                 device_id = event_data.get('device_id')
                 zone_name = event_data.get('zone_name', 'Unknown Zone')
                 serial = event_data.get('serial', '')
                 state = event_data.get('state', {})
-                
+
                 Domoticz.Debug(f"Device update: device_id={device_id}, zone={zone_name}, serial={serial}")
-                
+
                 # Skip if thermostats haven't been fetched yet
                 if not self.thermostats_fetched:
                     Domoticz.Debug(f"Skipping device event - thermostats not yet fetched")
                     return
-                
+
                 # Update individual thermostat sensor (non-leader devices only)
                 if device_id and device_id in self.thermostats_cache:
                     cached_info = self.thermostats_cache[device_id]
                     is_zone_leader = cached_info.get('is_zone_leader', False)
                     zone_id = cached_info.get('zone_id')
-                    
+
                     if not is_zone_leader and zone_id:
                         # Check if this is the tracked additional thermostat for this zone
                         if zone_id in self.zones_cache:
@@ -698,19 +702,19 @@ class BasePlugin:
                         Domoticz.Debug(f"Skipping device event for zone leader: device_id={device_id}")
                 else:
                     Domoticz.Debug(f"Device {device_id} not found in thermostats cache")
-        
+
         except Exception as e:
             Domoticz.Error(f"Error handling event: {e}")
-    
+
     def updateZoneDevice(self, zone_id: int, zone_name: str, state: Dict[str, Any]):
         """Create or update Domoticz devices for a zone
-        
+
         Simple unit allocation: 5 units per zone
         - Zone 1: Units 1-5
         - Zone 2: Units 6-10
         - Zone 3: Units 11-15
         - etc.
-        
+
         Within each zone's 5 units:
         - Unit 1: Temp+Humidity sensor
         - Unit 2: Thermostat setpoint
@@ -719,12 +723,12 @@ class BasePlugin:
         - Unit 5: Reserved
         """
         Domoticz.Debug(f"updateZoneDevice: zone_id={zone_id}, zone_name='{zone_name}'")
-        
+
         # Safety check - don't create/update devices if we don't have valid state
         if not state:
             Domoticz.Debug(f"Skipping updateZoneDevice for {zone_name} - no state data")
             return
-        
+
         try:
             # Calculate base unit: Zone 1 → Unit 1, Zone 2 → Unit 6, Zone 3 → Unit 11, etc.
             # Formula: base_unit = (zone_id - 1) * 5 + 1
@@ -732,14 +736,14 @@ class BasePlugin:
             if zone_id < 1 or zone_id > MAX_ZONES:
                 Domoticz.Error(f"Zone ID {zone_id} out of range (1-{MAX_ZONES})")
                 return
-            
+
             base_unit = (zone_id - 1) * 5 + 1
             temp_unit = base_unit          # Unit 1, 6, 11, 16, etc.
             thermostat_unit = base_unit + 1  # Unit 2, 7, 12, 17, etc.
             heating_unit = base_unit + 2     # Unit 3, 8, 13, 18, etc.
-            
+
             Domoticz.Debug(f"Zone {zone_id} '{zone_name}' uses units {base_unit}-{base_unit+4}")
-            
+
             # Cache zone info for control commands
             if zone_id not in self.zones_cache:
                 self.zones_cache[zone_id] = {}
@@ -748,7 +752,7 @@ class BasePlugin:
                 'base_unit': base_unit,
                 'thermostat_unit': thermostat_unit
             })
-            
+
             # Create temperature + humidity sensor if needed
             if temp_unit not in self.device_creation_attempted and temp_unit not in Devices:
                 self.device_creation_attempted.add(temp_unit)
@@ -762,7 +766,7 @@ class BasePlugin:
                     Domoticz.Log(f"Created temperature sensor: {zone_name} (Unit {temp_unit})")
                 except Exception as e:
                     Domoticz.Debug(f"Temp sensor (Unit {temp_unit}) already exists: {e}")
-            
+
             # Create thermostat setpoint device if needed
             if thermostat_unit not in self.device_creation_attempted and thermostat_unit not in Devices:
                 self.device_creation_attempted.add(thermostat_unit)
@@ -777,7 +781,7 @@ class BasePlugin:
                     Domoticz.Log(f"Created thermostat: {zone_name} (Unit {thermostat_unit})")
                 except Exception as e:
                     Domoticz.Debug(f"Thermostat (Unit {thermostat_unit}) already exists: {e}")
-            
+
             # Create heating status indicator if needed
             if heating_unit not in self.device_creation_attempted and heating_unit not in Devices:
                 self.device_creation_attempted.add(heating_unit)
@@ -791,7 +795,7 @@ class BasePlugin:
                     Domoticz.Log(f"Created heating indicator: {zone_name} (Unit {heating_unit})")
                 except Exception as e:
                     Domoticz.Debug(f"Heating indicator (Unit {heating_unit}) already exists: {e}")
-            
+
             # Extract state values
             cur_temp = state.get('cur_temp_c')
             humidity = state.get('hum_perc', 50)
@@ -799,70 +803,70 @@ class BasePlugin:
             mode = state.get('mode', 0)
             cur_heating = state.get('cur_heating', 0)
             battery_low = state.get('battery_low', False)
-            
+
             # Skip update if critical values are missing
             if cur_temp is None:
                 Domoticz.Debug(f"Skipping update for {zone_name} - no temperature data")
                 return
-            
+
             # Ensure humidity is valid
             if humidity is None or humidity < 0 or humidity > 100:
                 humidity = 50
-            
+
             # Determine battery level from battery_low flag
             # Domoticz: 255 = normal/full, 0-100 = percentage, <20 = low warning
             battery_level = 10 if battery_low else 255
-            
+
             # Update temperature + humidity sensor
             if temp_unit in Devices:
                 temp_status = "Normal" if not battery_low else "Low Battery"
                 sValue = f"{cur_temp};{humidity};{temp_status}"
                 Devices[temp_unit].Update(nValue=0, sValue=sValue, BatteryLevel=battery_level)
                 Domoticz.Debug(f"Updated {zone_name} temp: {cur_temp}°C, {humidity}%, battery: {battery_level}")
-            
+
             # Update thermostat setpoint
             if thermostat_unit in Devices:
                 setpoint_temp = target_temp if mode != 0 else 0.0
                 Domoticz.Debug(f"Updating {zone_name} thermostat: setpoint={setpoint_temp}°C, mode={mode}")
                 Devices[thermostat_unit].Update(nValue=0, sValue=str(setpoint_temp), BatteryLevel=battery_level)
-            
+
             # Update heating status indicator
             if heating_unit in Devices:
                 # cur_heating: 0=Off, 1=Heating, 2=Idle
                 is_heating = (cur_heating == 1)
                 Domoticz.Debug(f"Updating {zone_name} heating: {'ON' if is_heating else 'OFF'}")
                 Devices[heating_unit].Update(nValue=1 if is_heating else 0, sValue="On" if is_heating else "Off", BatteryLevel=battery_level)
-        
+
         except Exception as e:
             Domoticz.Error(f"Error updating zone device: {e}")
-    
+
     def updateThermostatDevice(self, device_id: int, zone_id: int, zone_name: str, serial_number: str, state: Dict[str, Any]):
         """Create or update Domoticz temp+hum sensor for additional thermostats (non-leaders)
-        
+
         Uses Unit 4 within the zone's 5-unit block for the first additional thermostat.
         Additional thermostats beyond the first are ignored (Unit 5 reserved).
         """
         Domoticz.Debug(f"updateThermostatDevice: device_id={device_id}, zone_id={zone_id}, zone={zone_name}, serial={serial_number}")
-        
+
         # Safety check
         if not state:
             Domoticz.Debug(f"Skipping updateThermostatDevice for device {device_id} - no state data")
             return
-        
+
         try:
             # Calculate base unit for this zone
             MAX_ZONES = 51
             if zone_id < 1 or zone_id > MAX_ZONES:
                 Domoticz.Debug(f"Zone ID {zone_id} out of range for additional thermostat")
                 return
-            
+
             base_unit = (zone_id - 1) * 5 + 1
             extra_unit = base_unit + 3  # Unit 4 within the zone's block
-            
+
             # Only create device for the first additional thermostat
             # We use Unit 4, which leaves Unit 5 reserved for future use
             Domoticz.Debug(f"Additional thermostat for zone {zone_id} uses Unit {extra_unit}")
-            
+
             # Create temperature + humidity sensor if needed
             if extra_unit not in self.device_creation_attempted and extra_unit not in Devices:
                 self.device_creation_attempted.add(extra_unit)
@@ -877,34 +881,34 @@ class BasePlugin:
                     Domoticz.Log(f"Created additional thermostat sensor: {device_name} (Unit {extra_unit})")
                 except Exception as e:
                     Domoticz.Debug(f"Additional thermostat (Unit {extra_unit}) already exists: {e}")
-            
+
             # Extract state values
             cur_temp = state.get('cur_temp_c')
             humidity = state.get('hum_perc', 50)
             battery_low = state.get('battery_low', False)
-            
+
             # Skip update if critical values missing
             if cur_temp is None:
                 Domoticz.Debug(f"Skipping update for device {device_id} - no temperature data")
                 return
-            
+
             # Ensure humidity is valid
             if humidity is None or humidity < 0 or humidity > 100:
                 humidity = 50
-            
+
             # Determine battery level from battery_low flag
             battery_level = 10 if battery_low else 255
-            
+
             # Update temperature + humidity sensor
             if extra_unit in Devices:
                 temp_status = "Normal" if not battery_low else "Low Battery"
                 sValue = f"{cur_temp};{humidity};{temp_status}"
                 Devices[extra_unit].Update(nValue=0, sValue=sValue, BatteryLevel=int(battery_level))
                 Domoticz.Debug(f"Updated thermostat {device_id} sensor: {cur_temp}°C, {humidity}%, battery: {battery_level}")
-        
+
         except Exception as e:
             Domoticz.Error(f"Error updating thermostat device: {e}")
-    
+
     def controlZone(self, zone_id: int, target_temperature: Optional[float] = None, heating_enabled: Optional[bool] = None):
         """Control a zone with optional temperature and/or heating mode in a single request"""
         try:
@@ -916,16 +920,16 @@ class BasePlugin:
             if heating_enabled is not None:
                 params.append(f"heating_enabled={'true' if heating_enabled else 'false'}")
                 Domoticz.Log(f"controlZone: zone {zone_id} heating_enabled={heating_enabled}")
-            
+
             if not params:
                 Domoticz.Error("controlZone called with no parameters")
                 return
-            
+
             # Send POST request to /zones/{zone_id}/set with query parameters
             url_parts = self.api_url.replace('http://', '').replace('https://', '').split(':')
             host = url_parts[0]
             port = int(url_parts[1]) if len(url_parts) > 1 else 8000
-            
+
             # Create temporary connection for control request
             control_conn = Domoticz.Connection(
                 Name="Zone Control",
@@ -934,7 +938,7 @@ class BasePlugin:
                 Address=host,
                 Port=str(port)
             )
-            
+
             # Build request with query parameters
             query_string = "&".join(params)
             headers = {
@@ -943,20 +947,20 @@ class BasePlugin:
             }
             if self.api_key:
                 headers['Authorization'] = f'Bearer {self.api_key}'
-            
+
             sendData = {
                 'Verb': 'POST',
                 'URL': f'/zones/{zone_id}/set?{query_string}',
                 'Headers': headers
             }
-            
+
             # Store the request to send after connection is established
             self.control_connections[control_conn] = sendData
-            
+
             # Connect (will send in onConnect callback)
             control_conn.Connect()
             Domoticz.Log(f"Initiating control request for zone {zone_id}")
-            
+
         except Exception as e:
             Domoticz.Error(f"Error controlling zone: {e}")
 

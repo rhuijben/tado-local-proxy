@@ -21,7 +21,7 @@ Tado Local is a **REST API backend** that connects your Tado smart heating syste
 
 ### Why Choose Local Control?
 
-Tado's cloud API has strict rate limits that can break home automation integrations. Traditional solutions require running full Home Assistant instances just to access one device. 
+Tado's cloud API has strict rate limits that can break home automation integrations. Traditional solutions require running full Home Assistant instances just to access one device.
 
 **Tado Local changes that.** Using the HomeKit protocol built into your Tado bridge, this tool provides a fast, reliable REST API backend that works with any platform. Set it up once, integrate everywhere.
 
@@ -201,7 +201,7 @@ sensor:
     resource: "http://localhost:4407/zones/1"
     value_template: "{{ value_json.current_temperature }}"
     unit_of_measurement: "°C"
-    
+
 climate:
   - platform: generic_thermostat
     name: "Living Room Heating"
@@ -295,11 +295,11 @@ While the REST API is the primary interface for integrations, Tado Local include
 
 - **Python 3.11 or newer** ([Download](https://www.python.org/downloads/))
   - Required for modern async/await syntax and performance improvements
-  
+
 - **Tado Internet Bridge** with HomeKit support (V3+ models)
   - Must have HomeKit functionality (look for the HomeKit logo on the device)
   - Check the label on your bridge for the HomeKit PIN (format: XXX-XX-XXX)
-  
+
 - **Network access** to your Tado bridge
   - Bridge and the server running Tado Local must be on the same network
   - You'll need to know the bridge's IP address (check your router's device list)
@@ -448,7 +448,7 @@ Once Tado Local is running, open your browser to `http://localhost:4407` for set
 
 **Primary uses**:
 - Initial cloud authentication
-- Connection status verification  
+- Connection status verification
 - Manual testing and debugging
 - Historical data visualization
 
@@ -541,7 +541,7 @@ sensor:
     resource: "http://localhost:4407/zones/1"
     value_template: "{{ value_json.current_temperature }}"
     unit_of_measurement: "°C"
-    
+
 climate:
   - platform: generic_thermostat
     name: "Living Room Heating"
@@ -568,11 +568,11 @@ The REST API works with any platform that supports HTTP requests:
 
 - **Python 3.11 or newer** ([Download](https://www.python.org/downloads/))
   - Required for modern async/await syntax and performance improvements
-  
+
 - **Tado Internet Bridge** with HomeKit support (V3+ models)
   - Must have HomeKit functionality (look for the HomeKit logo on the device)
   - Check the label on your bridge for the HomeKit PIN (format: XXX-XX-XXX)
-  
+
 - **Network access** to your Tado bridge
   - Bridge and the computer running Tado Local must be on the same network
   - You'll need to know the bridge's IP address (check your router's device list)
@@ -656,10 +656,37 @@ curl http://localhost:4407/status
 ### Control Temperature
 
 ```bash
-curl -X POST http://localhost:4407/thermostats/1/set_temperature \
-  -H "Content-Type: application/json" \
-  -d '{"temperature": 21.5}'
+# Set specific temperature (enables heating)
+curl -X POST "http://localhost:4407/zones/1/set?temperature=21.5"
+
+# Turn heating off (remembers previous value)
+curl -X POST "http://localhost:4407/zones/1/set?temperature=0"
+
+# Resume schedule (enable heating without changing target temperature)
+curl -X POST "http://localhost:4407/zones/1/set?temperature=-1"
+
+# Alternative: use explicit heating_enabled parameter
+curl -X POST "http://localhost:4407/zones/1/set?heating_enabled=true"
+curl -X POST "http://localhost:4407/zones/1/set?heating_enabled=false"
 ```
+
+**Temperature control modes:**
+- `temperature=-1` → Resume schedule/auto mode (turn on without changing target temp) - **Perfect for automation!**
+- `temperature=0` → Turn heating off (without changing target temp)
+- `temperature=5-30` → Set specific temperature and enable heating
+
+**Smart defaults:**
+- Setting `temperature=0` automatically implies `heating_enabled=false`
+- Setting `temperature=-1` automatically implies `heating_enabled=true`
+- Setting `temperature` >= 5 automatically implies `heating_enabled=true`
+- You can override these by explicitly setting `heating_enabled`
+
+**Why -1 and 0 are useful for automation:**
+Both `-1` and `0` preserve the target temperature stored in Tado. This means:
+- `temperature=0` turns heating **off** but remembers your setpoint
+- `temperature=-1` turns heating **on** using the remembered setpoint
+- Your Tado schedule remains intact - these are temporary overrides
+- Perfect for "away mode" scripts that disable/re-enable heating without changing schedules
 
 ### Get History Data
 
@@ -726,7 +753,7 @@ for record in history['history']:
 
 ### Single HomeKit Connection
 
-The Tado Internet Bridge hardware **only allows ONE HomeKit connection at a time**. 
+The Tado Internet Bridge hardware **only allows ONE HomeKit connection at a time**.
 
 **Before using Tado Local**, you must:
 
@@ -842,7 +869,7 @@ When building integrations:
 
 ```
 tado_local/
-├── __init__.py         # Package initialization  
+├── __init__.py         # Package initialization
 ├── __main__.py         # CLI entry point
 ├── api.py              # Main TadoLocalAPI class
 ├── routes.py           # FastAPI REST endpoints (primary integration layer)
@@ -956,7 +983,7 @@ All dependencies use permissive open source licenses compatible with Apache 2.0:
 ## 💬 Support & Community
 
 - **🐛 Bug Reports**: [GitHub Issues](https://github.com/ampscm/TadoLocal/issues)
-- **� Integration Help**: [GitHub Discussions](https://github.com/ampscm/TadoLocal/discussions)  
+- **� Integration Help**: [GitHub Discussions](https://github.com/ampscm/TadoLocal/discussions)
 - **📖 API Docs**: `http://localhost:4407/docs` (interactive documentation when running)
 
 ---
