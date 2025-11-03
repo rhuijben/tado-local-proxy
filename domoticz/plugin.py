@@ -17,31 +17,46 @@ Connects to Tado Local and creates/updates thermostat devices for each zone.
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
+# Domoticz plugin XML manifest (ignore Python linter errors on this XML block)
 """
-<plugin key="TadoLocal" name="Tado Local" author="TadoLocal" version="1.0.0-alpha1" wikilink="https://github.com/ampscm/TadoLocal" externallink="https://github.com/ampscm/TadoLocal">
+<plugin key="TadoLocal" name="Tado Local" author="ampscm" version="1.0.1" wikilink="https://github.com/ampscm/TadoLocal">
     <description>
         <h2>Tado Local Plugin</h2><br/>
-        Connects to Tado Local to monitor and control heating zones.<br/>
+        Connects to Tado Local REST API to monitor and control Tado heating zones.<br/>
+        <br/>
+        Uses Domoticz Extended Framework for unlimited device support.<br/>
+        <br/>
+        <h3>Device Hierarchy</h3>
+        Each zone uses Unit = zone_id with sub-units for device types:<br/>
+        - Sub-unit 1: Sensor (temp+humidity)<br/>
+        - Sub-unit 2: Thermostat (setpoint)<br/>
+        - Sub-unit 3: Heating indicator<br/>
+        - Sub-units 10+: Additional non-leader thermostats<br/>
+        <br/>
+        Example: Zone 1 → Unit 1 (Sub 1, 2, 3), Zone 2 → Unit 2 (Sub 1, 2, 3)<br/>
+        <br/>
+        Extended Framework removes the 255 device limit, supporting unlimited zones.<br/>
+        All zone devices report battery status from the zone's leader thermostat.<br/>
         <br/>
         <h3>Features</h3>
-        <ul style="list-style-type:square">
-            <li>Automatic zone discovery and device creation</li>
-            <li>Real-time updates via Server-Sent Events</li>
-            <li>Temperature and humidity monitoring</li>
-            <li>Thermostat control (heating mode, target temperature)</li>
-            <li>Automatic reconnection on connection loss</li>
-        </ul>
+        - Real-time updates via Server-Sent Events (SSE)<br/>
+        - Automatic zone discovery and device creation<br/>
+        - Temperature, humidity, and heating status monitoring<br/>
+        - Thermostat control (target temperature and on/off)<br/>
+        - Battery status reporting<br/>
+        - Auto-reconnect with configurable retry interval<br/>
     </description>
     <params>
         <param field="Address" label="API URL" width="300px" required="true" default="http://localhost:4407"/>
-        <param field="Mode1" label="Retry Interval (seconds)" width="50px" required="true" default="30"/>
-        <param field="Mode2" label="Auto-enable Devices" width="75px">
+        <param field="Mode1" label="Retry Interval (seconds)" width="100px" required="true" default="30"/>
+        <param field="Mode2" label="Auto Enable Devices" width="100px">
             <options>
-                <option label="Yes" value="1" default="true"/>
-                <option label="No" value="0"/>
+                <option label="Yes" value="true" default="true"/>
+                <option label="No" value="false"/>
             </options>
         </param>
-        <param field="Mode6" label="Debug" width="75px">
+        <param field="Mode3" label="API Key (optional)" width="300px" default="" password="true"/>
+        <param field="Mode6" label="Debug" width="100px">
             <options>
                 <option label="True" value="Debug"/>
                 <option label="False" value="Normal" default="true"/>
@@ -63,6 +78,7 @@ class BasePlugin:
         self.api_url = ""
         self.retry_interval = 30
         self.auto_enable_devices = True
+        self.api_key = ""
         self.sse_connection = None
         self.zones_fetch_connection = None
         self.thermostats_fetch_connection = None
@@ -84,6 +100,7 @@ class BasePlugin:
         self.api_url = Parameters["Address"].rstrip('/')
         self.retry_interval = int(Parameters["Mode1"])
         self.auto_enable_devices = (Parameters.get("Mode2", "1") == "1")
+        self.api_key = Parameters.get("Mode3", "").strip()
         
         # Set debug mode
         if Parameters["Mode6"] == "Debug":
@@ -92,6 +109,10 @@ class BasePlugin:
         Domoticz.Log(f"Tado Local Plugin started - API: {self.api_url}")
         Domoticz.Log(f"Retry interval: {self.retry_interval} seconds")
         Domoticz.Log(f"Auto-enable devices: {'Yes' if self.auto_enable_devices else 'No'}")
+        if self.api_key:
+            Domoticz.Log("API Key configured (authentication enabled)")
+        else:
+            Domoticz.Log("No API Key configured (authentication disabled)")
         
         # Clean up any devices with invalid unit numbers (> 255 or corrupt data)
         # This fixes devices created with old buggy unit number logic
@@ -128,6 +149,12 @@ class BasePlugin:
         # This ensures Domoticz completes initialization first
         Domoticz.Log("Will connect to API on first heartbeat...")
     
+    def getAuthHeaders(self) -> str:
+        """Build Authorization header string if API key is configured"""
+        if self.api_key:
+            return f"Authorization: Bearer {self.api_key}\r\n"
+        return ""
+    
     def onStop(self):
         """Domoticz calls this when the plugin is stopped"""
         Domoticz.Debug("onStop called")
@@ -160,26 +187,34 @@ class BasePlugin:
             if Connection == self.zones_fetch_connection:
                 # Zones fetch connection established, send GET request
                 Domoticz.Debug("Sending GET request for /zones")
+                headers = {
+                    'Accept': 'application/json',
+                    'Connection': 'close'
+                }
+                if self.api_key:
+                    headers['Authorization'] = f'Bearer {self.api_key}'
+                
                 sendData = {
                     'Verb': 'GET',
                     'URL': '/zones',
-                    'Headers': {
-                        'Accept': 'application/json',
-                        'Connection': 'close'
-                    }
+                    'Headers': headers
                 }
                 Connection.Send(sendData)
             
             elif Connection == self.thermostats_fetch_connection:
                 # Thermostats fetch connection established, send GET request
                 Domoticz.Debug("Sending GET request for /thermostats")
+                headers = {
+                    'Accept': 'application/json',
+                    'Connection': 'close'
+                }
+                if self.api_key:
+                    headers['Authorization'] = f'Bearer {self.api_key}'
+                
                 sendData = {
                     'Verb': 'GET',
                     'URL': '/thermostats',
-                    'Headers': {
-                        'Accept': 'application/json',
-                        'Connection': 'close'
-                    }
+                    'Headers': headers
                 }
                 Connection.Send(sendData)
             
@@ -189,6 +224,7 @@ class BasePlugin:
                 
                 # Build raw HTTP GET request with types=zone,device and refresh_interval=300 (5 minutes)
                 # This ensures Domoticz gets both zone and device updates for non-leader thermostats
+                auth_header = self.getAuthHeaders()
                 request = (
                     "GET /events?types=zone,device&refresh_interval=300 HTTP/1.1\r\n"
                     f"Host: {Connection.Address}:{Connection.Port}\r\n"
@@ -196,6 +232,7 @@ class BasePlugin:
                     "Accept: text/event-stream\r\n"
                     "Cache-Control: no-cache\r\n"
                     "Connection: keep-alive\r\n"
+                    f"{auth_header}"
                     "\r\n"
                 )
                 
@@ -375,14 +412,16 @@ class BasePlugin:
                     # Create devices for non-leader thermostats
                     for thermostat in thermostats:
                         device_id = thermostat.get('device_id')
+                        zone_id = thermostat.get('zone_id')
                         zone_name = thermostat.get('zone_name', 'Unknown Zone')
                         serial_number = thermostat.get('serial_number', '')
                         is_zone_leader = thermostat.get('is_zone_leader', False)
                         state = thermostat.get('state', {})
                         
                         if device_id:
-                            # Cache thermostat info
+                            # Cache thermostat info including zone_id
                             self.thermostats_cache[device_id] = {
+                                'zone_id': zone_id,
                                 'zone_name': zone_name,
                                 'serial_number': serial_number,
                                 'is_zone_leader': is_zone_leader,
@@ -391,10 +430,9 @@ class BasePlugin:
                             
                             # Only create sensors for non-leader thermostats
                             # Zone leaders are already represented by the main zone device
-                            if not is_zone_leader:
+                            if not is_zone_leader and zone_id:
                                 Domoticz.Log(f"Creating sensor for non-leader thermostat: {zone_name} ({serial_number[-4:]})")
-                                # Use unit numbers 201-255 (255 - device_id): zone devices use 1-200 (40 zones × 5 units)
-                                self.updateThermostatDevice(device_id, zone_name, serial_number, state)
+                                self.updateThermostatDevice(device_id, zone_id, zone_name, serial_number, state)
                             else:
                                 Domoticz.Debug(f"Skipping zone leader: {zone_name} ({serial_number[-4:]})")
                     
@@ -624,9 +662,10 @@ class BasePlugin:
                 if device_id and device_id in self.thermostats_cache:
                     cached_info = self.thermostats_cache[device_id]
                     is_zone_leader = cached_info.get('is_zone_leader', False)
+                    zone_id = cached_info.get('zone_id')
                     
-                    if not is_zone_leader:
-                        self.updateThermostatDevice(device_id, zone_name, serial, state)
+                    if not is_zone_leader and zone_id:
+                        self.updateThermostatDevice(device_id, zone_id, zone_name, serial, state)
                     else:
                         Domoticz.Debug(f"Skipping device event for zone leader: device_id={device_id}")
                 else:
@@ -636,7 +675,18 @@ class BasePlugin:
             Domoticz.Error(f"Error handling event: {e}")
     
     def updateZoneDevice(self, zone_id: int, zone_name: str, state: Dict[str, Any]):
-        """Create or update Domoticz devices for a zone"""
+        """Create or update Domoticz devices for a zone using Extended Framework
+        
+        Extended Framework hierarchy using DeviceID with sub-units:
+        - Zone X uses Unit = zone_id (1, 2, 3, etc.)
+          - Sub-unit 1: Sensor (temp+humidity)
+          - Sub-unit 2: Thermostat (setpoint)
+          - Sub-unit 3: Heating indicator
+          - Sub-units 10+: Additional non-leader thermostats
+        
+        This provides a clean hierarchy supporting unlimited zones.
+        All zone devices report battery status from the zone's leader thermostat.
+        """
         Domoticz.Debug(f"updateZoneDevice: {zone_name}")
         
         # Safety check - don't create/update devices if we don't have valid state
@@ -645,64 +695,71 @@ class BasePlugin:
             return
         
         try:
-            # Calculate unit numbers based on zone_id ((zone_id-1) * 5 + offset)
-            # Supports up to 40 zones: Zone 1 gets units 1-5, Zone 2 gets units 6-10, ..., Zone 40 gets units 196-200
-            base_unit = (zone_id - 1) * 5
-            temp_unit = base_unit + 1      # Temperature sensor (WTGR800)
-            setpoint_unit = base_unit + 2   # Thermostat setpoint
-            heating_unit = base_unit + 3    # Heating status (Lighting 2)
-            # Future: +4, +5 available for expansion
+            # Extended Framework: Use zone_id as Unit, with sub-units for device types
+            # Zone 1, Unit 1: sub-unit 1 (sensor), 2 (thermostat), 3 (heating)
+            # Zone 2, Unit 2: sub-unit 1 (sensor), 2 (thermostat), 3 (heating)
+            # etc.
+            
+            # Sanity check: limit zone_id to reasonable range to prevent crashes
+            MAX_ZONE_ID = 1000  # Practical limit - most users have <50 zones
+            if zone_id > MAX_ZONE_ID:
+                Domoticz.Log(f"Skipping zone_id={zone_id} ('{zone_name}'): exceeds maximum supported zone ID {MAX_ZONE_ID}")
+                return
+            
+            unit = zone_id
+            temp_subunit = 1      # Temp+Humidity sensor
+            setpoint_subunit = 2   # Thermostat setpoint
+            heating_subunit = 3    # Heating status indicator
             
             # Check if we already have devices for this zone
             if zone_id not in self.zones_cache:
                 self.zones_cache[zone_id] = {
-                    'temp_unit': temp_unit,
-                    'setpoint_unit': setpoint_unit,
-                    'heating_unit': heating_unit,
+                    'unit': unit,
                     'name': zone_name
                 }
             
-            # Create temperature + humidity device if needed
-            if temp_unit not in Devices:
-                Domoticz.Log(f"Creating temperature sensor for zone: {zone_name} (Unit {temp_unit})")
+            # Create temperature + humidity device if needed (Unit X, Sub-unit 1)
+            if (unit, temp_subunit) not in Devices:
+                Domoticz.Log(f"Creating temperature sensor for zone: {zone_name} (Unit {unit}, Sub-unit {temp_subunit})")
                 
                 Domoticz.Device(
                     Name=f"{zone_name}",
-                    Unit=temp_unit,
+                    Unit=unit,
+                    DeviceID=f"{unit}:{temp_subunit}",  # Extended Framework ID with sub-unit
                     TypeName="Temp+Hum",
                     Used=1 if self.auto_enable_devices else 0
                 ).Create()
             
-            # Create thermostat setpoint device if needed
-            if setpoint_unit not in Devices:
-                Domoticz.Log(f"Creating thermostat for zone: {zone_name} (Unit {setpoint_unit})")
+            # Create thermostat setpoint device if needed (Unit X, Sub-unit 2)
+            if (unit, setpoint_subunit) not in Devices:
+                Domoticz.Log(f"Creating thermostat for zone: {zone_name} (Unit {unit}, Sub-unit {setpoint_subunit})")
                 
                 # Use Thermostat Setpoint device - allows continuous temperature selection
                 Domoticz.Device(
                     Name=f"{zone_name} Thermostat",
-                    Unit=setpoint_unit,
+                    Unit=unit,
+                    DeviceID=f"{unit}:{setpoint_subunit}",  # Extended Framework ID with sub-unit
                     Type=242,
                     Subtype=1,
                     Used=1 if self.auto_enable_devices else 0
                 ).Create()
                 
-                Domoticz.Log(f"Created thermostat setpoint for {zone_name} - Unit {setpoint_unit}")
+                Domoticz.Log(f"Created thermostat setpoint for {zone_name} - Unit {unit}, Sub-unit {setpoint_subunit}")
             
-            # Create heating status switch if needed
-            if heating_unit not in Devices:
-                Domoticz.Log(f"Creating heating status indicator for zone: {zone_name} (Unit {heating_unit})")
+            # Create heating status indicator (Unit X, Sub-unit 3)
+            if (unit, heating_subunit) not in Devices:
+                Domoticz.Log(f"Creating heating status for zone: {zone_name} (Unit {unit}, Sub-unit {heating_subunit})")
                 
-                # Use Lighting 2 switch to show heating on/off status
+                # Use switch to show heating on/off status
                 Domoticz.Device(
                     Name=f"{zone_name} Heating",
-                    Unit=heating_unit,
-                    Type=244,
-                    Subtype=73,
-                    Switchtype=0,
+                    Unit=unit,
+                    DeviceID=f"{unit}:{heating_subunit}",  # Extended Framework ID with sub-unit
+                    TypeName="Switch",
                     Used=1 if self.auto_enable_devices else 0
                 ).Create()
                 
-                Domoticz.Log(f"Created heating status switch for {zone_name} - Unit {heating_unit}")
+                Domoticz.Log(f"Created heating indicator for {zone_name} - Unit {unit}, Sub-unit {heating_subunit}")
             
             # Extract state values
             cur_temp = state.get('cur_temp_c')
@@ -724,12 +781,12 @@ class BasePlugin:
             # Determine battery level (255 = normal, <20 = low)
             battery_level = 20 if battery_low else 255
             
-            # Update temperature + humidity device
-            if temp_unit in Devices and cur_temp is not None:
+            # Update temperature + humidity device (Unit X, Sub-unit 1)
+            if (unit, temp_subunit) in Devices and cur_temp is not None:
                 temp_status = "Normal" if not battery_low else "Low Battery"
                 sValue = f"{cur_temp};{humidity};{temp_status}"
                 
-                Devices[temp_unit].Update(
+                Devices[(unit, temp_subunit)].Update(
                     nValue=0,
                     sValue=sValue,
                     BatteryLevel=battery_level,
@@ -737,27 +794,27 @@ class BasePlugin:
                 )
                 Domoticz.Debug(f"Updated {zone_name} temp sensor: {cur_temp}°C, {humidity}%")
             
-            # Update thermostat setpoint device
+            # Update thermostat setpoint device (Unit X, Sub-unit 2)
             # When mode=0 (Off), set target to 0
             # Otherwise use actual target temperature
-            if setpoint_unit in Devices:
+            if (unit, setpoint_subunit) in Devices:
                 setpoint_temp = target_temp if mode != 0 else 0.0
                 
                 # Thermostat setpoint uses sValue as just the temperature
                 Domoticz.Log(f"Updating {zone_name} thermostat: setpoint={setpoint_temp}°C, mode={mode}")
                 
                 try:
-                    Devices[setpoint_unit].Update(
+                    Devices[(unit, setpoint_subunit)].Update(
                         nValue=0,
                         sValue=str(setpoint_temp),
                         BatteryLevel=battery_level,
                         TimedOut=0
                     )
                 except Exception as e:
-                    Domoticz.Error(f"Failed to update thermostat {setpoint_unit}: {e}")
+                    Domoticz.Error(f"Failed to update thermostat unit {unit} sub {setpoint_subunit}: {e}")
             
-            # Update heating status switch
-            if heating_unit in Devices:
+            # Update heating status indicator (Unit X, Sub-unit 3)
+            if (unit, heating_subunit) in Devices:
                 # cur_heating: 0=Off, 1=Heating, 2=Idle (on but not heating)
                 # For switch: nValue=1 means On (heating), nValue=0 means Off
                 is_heating = (cur_heating == 1)
@@ -765,21 +822,30 @@ class BasePlugin:
                 Domoticz.Log(f"Updating {zone_name} heating status: {'ON' if is_heating else 'OFF'} (cur_heating={cur_heating})")
                 
                 try:
-                    Devices[heating_unit].Update(
+                    Devices[(unit, heating_subunit)].Update(
                         nValue=1 if is_heating else 0,
                         sValue="On" if is_heating else "Off",
                         BatteryLevel=battery_level,
                         TimedOut=0
                     )
                 except Exception as e:
-                    Domoticz.Error(f"Failed to update heating status {heating_unit}: {e}")
+                    Domoticz.Error(f"Failed to update heating status unit {unit} sub {heating_subunit}: {e}")
         
         except Exception as e:
             Domoticz.Error(f"Error updating zone device: {e}")
     
-    def updateThermostatDevice(self, device_id: int, zone_name: str, serial_number: str, state: Dict[str, Any]):
-        """Create or update Domoticz temp+hum sensor for individual thermostats (non-leaders)"""
-        Domoticz.Debug(f"updateThermostatDevice: device_id={device_id}, zone={zone_name}, serial={serial_number}")
+    def updateThermostatDevice(self, device_id: int, zone_id: int, zone_name: str, serial_number: str, state: Dict[str, Any]):
+        """Create or update Domoticz temp+hum sensor for individual thermostats (non-leaders)
+        
+        Extended Framework hierarchy:
+        - Additional non-leader thermostats use same Unit as zone, with sub-units starting at 10
+        - Zone X, device_id 0 -> Unit X, Sub-unit 10
+        - Zone X, device_id 1 -> Unit X, Sub-unit 11
+        - etc.
+        
+        This keeps all zone devices logically grouped under the same Unit.
+        """
+        Domoticz.Debug(f"updateThermostatDevice: device_id={device_id}, zone_id={zone_id}, zone={zone_name}, serial={serial_number}")
         
         # Safety check - don't create/update devices if we don't have valid state
         if not state:
@@ -787,20 +853,30 @@ class BasePlugin:
             return
         
         try:
-            # Use unit numbers counting down from 255 to avoid conflicts with zone devices (1-200)
-            # Supports 40 zones (1-200) + up to 55 non-leader thermostats (201-255)
-            # device_id 0 gets unit 255, device_id 1 gets 254, etc.
-            unit = 255 - device_id
+            # Use zone's unit with sub-units starting at 10 for additional thermostats
+            # Zone devices use sub-units 1-3, additional thermostats use 10+
+            unit = zone_id
+            subunit = 10 + device_id
+            
+            # Sanity check: limit sub-unit numbers to prevent crashes
+            # Most users only need the main zone devices (sub-units 1-3)
+            # Limit additional thermostats to reasonable range
+            MAX_SUBUNIT = 100  # Allow up to 90 additional thermostats per zone
+            if subunit > MAX_SUBUNIT:
+                Domoticz.Log(f"Skipping thermostat device_id={device_id} for zone {zone_id}: sub-unit {subunit} exceeds limit {MAX_SUBUNIT}")
+                Domoticz.Log(f"Too many additional thermostats in zone '{zone_name}'. Only the first {MAX_SUBUNIT - 10} will be created.")
+                return
             
             # Create temperature + humidity device if needed
-            if unit not in Devices:
+            if (unit, subunit) not in Devices:
                 # Create device with zone + serial name for identification
                 device_name = f"{zone_name} ({serial_number[-4:]})"
-                Domoticz.Log(f"Creating thermostat sensor: {device_name} (Unit {unit}, Device ID {device_id})")
+                Domoticz.Log(f"Creating thermostat sensor: {device_name} (Unit {unit}, Sub-unit {subunit})")
                 
                 Domoticz.Device(
                     Name=device_name,
                     Unit=unit,
+                    DeviceID=f"{unit}:{subunit}",  # Extended Framework ID with sub-unit
                     TypeName="Temp+Hum",
                     Used=1 if self.auto_enable_devices else 0
                 ).Create()
@@ -823,11 +899,11 @@ class BasePlugin:
             battery_level = 20 if battery_low else 255
             
             # Update temperature + humidity device
-            if unit in Devices and cur_temp is not None:
+            if (unit, subunit) in Devices and cur_temp is not None:
                 temp_status = "Normal" if not battery_low else "Low Battery"
                 sValue = f"{cur_temp};{humidity};{temp_status}"
                 
-                Devices[unit].Update(
+                Devices[(unit, subunit)].Update(
                     nValue=0,
                     sValue=sValue,
                     BatteryLevel=battery_level,
@@ -870,13 +946,17 @@ class BasePlugin:
             
             # Build request with query parameters
             query_string = "&".join(params)
+            headers = {
+                'Content-Length': '0',
+                'Connection': 'close'  # Ask server to close connection after response
+            }
+            if self.api_key:
+                headers['Authorization'] = f'Bearer {self.api_key}'
+            
             sendData = {
                 'Verb': 'POST',
                 'URL': f'/zones/{zone_id}/set?{query_string}',
-                'Headers': {
-                    'Content-Length': '0',
-                    'Connection': 'close'  # Ask server to close connection after response
-                }
+                'Headers': headers
             }
             
             # Store the request to send after connection is established

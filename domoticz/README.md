@@ -8,8 +8,36 @@ This Domoticz plugin connects to Tado Local to monitor and control your Tado hea
 - **Real-time Updates**: Uses Server-Sent Events (SSE) to receive instant state changes
 - **Temperature & Humidity Monitoring**: Displays current temperature and humidity for each zone
 - **Thermostat Control**: Set target temperature and heating mode (On/Off)
+- **Heating Status Indicator**: Shows when zone is actively heating
+- **Battery Status**: All zone devices report battery level from the zone's leader thermostat
+- **Extended Framework**: Supports unlimited zones using modern Domoticz APIs with hierarchical device structure
 - **Auto-reconnect**: Automatically reconnects if connection is lost
 - **Configurable Retry**: Set custom retry interval for connection attempts
+
+## Device Numbering Scheme
+
+The plugin uses **Domoticz Extended Framework** with a hierarchical ID-based scheme:
+
+### Device Hierarchy
+Each zone uses `Unit = zone_id` with sub-units for different device types:
+
+- **Sub-unit 1**: Sensor (temp+humidity)
+- **Sub-unit 2**: Thermostat (setpoint)
+- **Sub-unit 3**: Heating indicator
+- **Sub-units 10+**: Additional non-leader thermostats
+
+### Examples
+- **Zone 1**: Unit 1 → Sub-unit 1 (sensor), Sub-unit 2 (thermostat), Sub-unit 3 (heating)
+- **Zone 2**: Unit 2 → Sub-unit 1 (sensor), Sub-unit 2 (thermostat), Sub-unit 3 (heating)
+- **Zone 3**: Unit 3 → Sub-unit 1 (sensor), Sub-unit 2 (thermostat), Sub-unit 3 (heating)
+
+### Extended Framework Benefits
+The Extended Framework removes the legacy 255 device limit, supporting unlimited zones.
+
+All devices within a zone are logically grouped under the same Unit ID, making management intuitive.
+
+### Battery Status
+All sub-units for each zone (sensor, thermostat, heating) report the battery status from the zone's leader thermostat.
 
 ## Installation
 
@@ -37,16 +65,39 @@ This Domoticz plugin connects to Tado Local to monitor and control your Tado hea
 ### Parameters
 
 - **API URL** (required): The URL to your Tado Local instance
-  - Default: `http://localhost:8000`
-  - Example: `http://192.168.1.100:8000`
+  - Default: `http://localhost:4407`
+  - Example: `http://192.168.1.100:4407`
 
 - **Retry Interval** (required): How long to wait (in seconds) before retrying connection after failure
   - Default: `30`
   - Range: 10-300 seconds recommended
 
+- **Auto Enable Devices**: Automatically enable newly discovered devices
+  - Options: Yes / No
+  - Default: Yes
+
+- **API Key** (optional): Bearer token for API authentication
+  - Leave empty for no authentication (default)
+  - If set, will send as `Authorization: Bearer <key>` header
+  - Use this if you've configured API key authentication in Tado Local
+  - Note: Authentication is optional and primarily prevents accidental access on local networks
+
 - **Debug**: Enable debug logging
   - Options: True / False
   - Default: False
+
+### Authentication
+
+The plugin supports optional API key authentication using Bearer tokens. This is useful for:
+- Preventing accidental access from other clients on your local network
+- Basic access control (not cryptographically secure over HTTP)
+
+**To enable authentication:**
+1. Configure an API key in your Tado Local REST API (see API documentation)
+2. Enter the same key in the plugin's "API Key" field
+3. The plugin will send `Authorization: Bearer <your-key>` with all requests
+
+**Note:** The web UI and other unauthenticated endpoints remain accessible for easy management.
 
 ## How It Works
 

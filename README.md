@@ -344,8 +344,29 @@ Options:
   --bridge-ip IP        IP address of the Tado bridge
   --pin XXX-XX-XXX      HomeKit PIN for initial pairing
   --port PORT           API server port (default: 4407)
+  --api-key KEY         Optional Bearer token for API authentication (env: TADO_API_KEY)
   --clear-pairings      Clear all existing pairings before starting
 ```
+
+### Optional Authentication
+
+You can optionally secure the REST API with a Bearer token:
+
+```bash
+# Set via command line
+tado-local --api-key your-secret-key
+
+# Or via environment variable
+export TADO_API_KEY=your-secret-key
+tado-local
+```
+
+When authentication is enabled:
+- API endpoints require `Authorization: Bearer <your-key>` header
+- Web UI remains accessible for easy management
+- Provides basic protection on local networks (not cryptographically secure over HTTP)
+
+Configure your clients (Domoticz, etc.) with the same API key to authenticate requests.
 
 ---
 
