@@ -58,7 +58,6 @@ jobs:
       run: |
         python -m py_compile setup.py
         python -m py_compile local.py
-        python -m py_compile homekit_uuids.py
 
     - name: Check demo scripts syntax
       run: |
