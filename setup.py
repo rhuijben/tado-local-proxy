@@ -16,11 +16,15 @@
 
 from setuptools import setup, find_packages
 from pathlib import Path
-import sys
+import re
 
-# Add package directory to path to import version
-sys.path.insert(0, str(Path(__file__).parent))
-from tado_local.__version__ import __version__
+# Read version without importing the package (to avoid dependency issues during setup)
+version_file = Path(__file__).parent / "tado_local" / "__version__.py"
+version_content = version_file.read_text(encoding="utf-8")
+version_match = re.search(r'^__version__\s*=\s*[\'"]([^\'"]*)[\'"]', version_content, re.MULTILINE)
+if not version_match:
+    raise RuntimeError("Unable to find version string in __version__.py")
+__version__ = version_match.group(1)
 
 # Read the README file
 readme_file = Path(__file__).parent / "README.md"

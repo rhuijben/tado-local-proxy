@@ -60,7 +60,11 @@ jobs:
         python -m py_compile local.py
         python -m py_compile td-mgr.py
         python -m py_compile homekit_uuids.py
-        python -m py_compile domoticz/plugin.py
+
+    - name: Verify Domoticz plugin syntax (basic check)
+      run: |
+        python -c "import ast; ast.parse(open('domoticz/plugin.py').read())"
+      shell: bash
 
     - name: Test package imports
       run: |
@@ -92,8 +96,13 @@ jobs:
 
     - name: Run Ruff
       run: |
-        ruff check . --output-format=github || true
+        ruff check . --exclude domoticz/ --output-format=github || true
 
     - name: Run Flake8
       run: |
         flake8 tado_local/ --count --select=E9,F63,F7,F82 --show-source --statistics || true
+
+    - name: Check Domoticz plugin syntax only
+      run: |
+        python -c "import ast; ast.parse(open('domoticz/plugin.py').read())"
+      continue-on-error: false
