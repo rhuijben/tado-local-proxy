@@ -347,18 +347,20 @@ from datetime import datetime, timedelta
 TADO_API = "http://localhost:4407"
 
 # Get all zones
-zones = requests.get(f"{TADO_API}/zones").json()
+response = requests.get(f"{TADO_API}/zones").json()
+zones = response['zones']
 
 for zone in zones:
-    print(f"{zone['name']}: {zone['current_temperature']}°C")
-    print(f"  Target: {zone['target_temperature']}°C")
-    print(f"  Humidity: {zone['humidity']}%")
-    print(f"  Heating: {'ON' if zone['heating_active'] else 'OFF'}")
+    state = zone['state']
+    print(f"{zone['name']}: {state['cur_temp_c']}°C")
+    print(f"  Target: {state['target_temp_c']}°C")
+    print(f"  Humidity: {state['hum_perc']}%")
+    print(f"  Heating: {'ON' if state['cur_heating'] == 1 else 'OFF'}")
     print()
 
-# Set temperature for a specific thermostat
+# Set temperature for a specific zone
 requests.post(
-    f"{TADO_API}/thermostats/1/set_temperature",
+    f"{TADO_API}/zones/1/set",
     json={"temperature": 22.0}
 )
 
