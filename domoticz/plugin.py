@@ -3,7 +3,7 @@ Tado Local Plugin for Domoticz
 Connects to Tado Local and creates/updates thermostat devices for each zone.
 """
 #
-# Copyright 2025 TadoLocalProxy and AmpScm contributors.
+# Copyright 2025 The TadoLocal and AmpScm contributors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -24,19 +24,22 @@ Connects to Tado Local and creates/updates thermostat devices for each zone.
         <h2>Tado Local Plugin</h2><br/>
         Connects to Tado Local REST API to monitor and control Tado heating zones.<br/>
         <br/>
-        Uses Domoticz Extended Framework for unlimited device support.<br/>
+        <h3>Device Layout</h3>
+        Each zone uses 5 consecutive Unit numbers:<br/>
+        - Zone 1: Units 1-5 (temp sensor, thermostat, heating, extra thermostat slots)<br/>
+        - Zone 2: Units 6-10<br/>
+        - Zone 3: Units 11-15<br/>
+        - etc.<br/>
         <br/>
-        <h3>Device Hierarchy</h3>
-        Each zone uses Unit = zone_id with sub-units for device types:<br/>
-        - Sub-unit 1: Sensor (temp+humidity)<br/>
-        - Sub-unit 2: Thermostat (setpoint)<br/>
-        - Sub-unit 3: Heating indicator<br/>
-        - Sub-units 10+: Additional non-leader thermostats<br/>
+        Within each zone's 5 units:<br/>
+        - Unit 1: Temperature + Humidity sensor<br/>
+        - Unit 2: Thermostat setpoint control<br/>
+        - Unit 3: Heating status indicator<br/>
+        - Unit 4: First additional thermostat (if present)<br/>
+        - Unit 5: Reserved for future use<br/>
         <br/>
-        Example: Zone 1 → Unit 1 (Sub 1, 2, 3), Zone 2 → Unit 2 (Sub 1, 2, 3)<br/>
-        <br/>
-        Extended Framework removes the 255 device limit, supporting unlimited zones.<br/>
-        All zone devices report battery status from the zone's leader thermostat.<br/>
+        Supports up to 51 zones (255 unit limit ÷ 5 units per zone).<br/>
+        All devices report battery status from their thermostat.<br/>
         <br/>
         <h3>Features</h3>
         - Real-time updates via Server-Sent Events (SSE)<br/>
@@ -116,12 +119,14 @@ class BasePlugin:
             Domoticz.Log("No API Key configured (authentication disabled)")
         
         # Clean up any devices with invalid unit numbers (> 255 or corrupt data)
-        # This fixes devices created with old buggy unit number logic
         devices_to_delete = []
         for unit in Devices:
             try:
                 device = Devices[unit]
-                Domoticz.Debug(f"Found existing device: Unit {unit}, Name: {device.Name}, DeviceID: {device.DeviceID}")
+                Domoticz.Debug(f"Found existing device: Unit {unit}, Name: {device.Name}")
+                
+                # Mark existing units as created to prevent recreation attempts
+                self.device_creation_attempted.add(unit)
                 
                 # Check if unit number is valid
                 if isinstance(unit, int) and unit > 255:
@@ -144,6 +149,8 @@ class BasePlugin:
         
         if devices_to_delete:
             Domoticz.Log(f"Cleaned up {len(devices_to_delete)} invalid devices")
+        
+        Domoticz.Log(f"Found {len(self.device_creation_attempted)} existing devices")
         
         # Set heartbeat to 30 seconds (reduced from 10)
         Domoticz.Heartbeat(30)
@@ -434,8 +441,23 @@ class BasePlugin:
                             # Only create sensors for non-leader thermostats
                             # Zone leaders are already represented by the main zone device
                             if not is_zone_leader and zone_id:
-                                Domoticz.Log(f"Creating sensor for non-leader thermostat: {zone_name} ({serial_number[-4:]})")
-                                self.updateThermostatDevice(device_id, zone_id, zone_name, serial_number, state)
+                                # Track the first non-leader thermostat for each zone
+                                # We only have 1 slot (Unit 4) for additional thermostats per zone
+                                zone_key = f'extra_thermostat_{zone_id}'
+                                if zone_key not in self.zones_cache or zone_id not in self.zones_cache:
+                                    # First additional thermostat for this zone
+                                    if zone_id not in self.zones_cache:
+                                        self.zones_cache[zone_id] = {}
+                                    self.zones_cache[zone_id]['extra_thermostat_device_id'] = device_id
+                                    Domoticz.Log(f"Creating sensor for non-leader thermostat: {zone_name} ({serial_number[-4:]}) - device_id {device_id}")
+                                    self.updateThermostatDevice(device_id, zone_id, zone_name, serial_number, state)
+                                elif self.zones_cache[zone_id].get('extra_thermostat_device_id') == device_id:
+                                    # This is the tracked additional thermostat, update it
+                                    Domoticz.Debug(f"Updating tracked non-leader thermostat: {zone_name} ({serial_number[-4:]}) - device_id {device_id}")
+                                    self.updateThermostatDevice(device_id, zone_id, zone_name, serial_number, state)
+                                else:
+                                    # Second+ additional thermostat - ignore
+                                    Domoticz.Debug(f"Ignoring additional thermostat beyond first: {zone_name} ({serial_number[-4:]}) - device_id {device_id}")
                             else:
                                 Domoticz.Debug(f"Skipping zone leader: {zone_name} ({serial_number[-4:]})")
                     
@@ -462,49 +484,40 @@ class BasePlugin:
     
     def onCommand(self, Unit, Command, Level, Hue):
         """Domoticz calls this when a device is controlled"""
-        Domoticz.Log(f"onCommand called: Unit={Unit}, Command={Command}, Level={Level}, Hue={Hue}")
+        Domoticz.Log(f"onCommand: Unit={Unit}, Command={Command}, Level={Level}")
         
         try:
-            # Find the zone_id for this device
+            # Find the zone_id for this thermostat unit
+            # Thermostat is at position 2 in each zone's 5-unit block
+            # Unit 2 → Zone 1, Unit 7 → Zone 2, Unit 12 → Zone 3, etc.
+            # Formula: zone_id = ((unit - 2) // 5) + 1
+            
             zone_id = None
             for zid, zone_data in self.zones_cache.items():
-                # Check if this is the setpoint device for this zone
-                if zone_data.get('setpoint_unit') == Unit:
+                if zone_data.get('thermostat_unit') == Unit:
                     zone_id = zid
                     break
             
-            Domoticz.Log(f"Found zone_id: {zone_id} for unit {Unit}")
-            
             if zone_id is None:
-                Domoticz.Log(f"Unit {Unit} is not a thermostat setpoint device")
-                Domoticz.Log(f"zones_cache: {self.zones_cache}")
+                Domoticz.Debug(f"Unit {Unit} is not a thermostat device")
                 return
             
             zone_name = self.zones_cache[zone_id]['name']
             Domoticz.Log(f"Processing command for zone: {zone_name} (ID: {zone_id})")
             
             # Handle thermostat setpoint changes
-            # Note: Thermostat devices send "Set Level" command, not "Set Point"
             if Command == "Set Level":
-                # Level contains the target temperature directly
                 target_temp = float(Level)
-                
                 if target_temp == 0:
-                    # Setting to 0 means turn off
                     Domoticz.Log(f"Turning off {zone_name}")
                     self.controlZone(zone_id, heating_enabled=False)
                 else:
-                    # Set target temperature and ensure heating is on (single request)
-                    Domoticz.Log(f"Setting {zone_name} target temperature to {target_temp}°C")
+                    Domoticz.Log(f"Setting {zone_name} to {target_temp}°C")
                     self.controlZone(zone_id, target_temperature=target_temp, heating_enabled=True)
-            
             elif Command == "Off":
-                # Turn off heating
                 Domoticz.Log(f"Turning off {zone_name}")
                 self.controlZone(zone_id, heating_enabled=False)
-            
             elif Command == "On":
-                # Turn on heating (with last known setpoint)
                 Domoticz.Log(f"Turning on {zone_name}")
                 self.controlZone(zone_id, heating_enabled=True)
         
@@ -668,7 +681,19 @@ class BasePlugin:
                     zone_id = cached_info.get('zone_id')
                     
                     if not is_zone_leader and zone_id:
-                        self.updateThermostatDevice(device_id, zone_id, zone_name, serial, state)
+                        # Check if this is the tracked additional thermostat for this zone
+                        if zone_id in self.zones_cache:
+                            tracked_device_id = self.zones_cache[zone_id].get('extra_thermostat_device_id')
+                            if tracked_device_id == device_id:
+                                # This is the tracked additional thermostat - update it
+                                Domoticz.Debug(f"Updating tracked additional thermostat: device_id={device_id}")
+                                self.updateThermostatDevice(device_id, zone_id, zone_name, serial, state)
+                            else:
+                                # Not the tracked one - ignore
+                                Domoticz.Debug(f"Ignoring non-tracked additional thermostat: device_id={device_id}")
+                        else:
+                            # Zone not in cache yet - skip
+                            Domoticz.Debug(f"Zone {zone_id} not in cache yet for device {device_id}")
                     else:
                         Domoticz.Debug(f"Skipping device event for zone leader: device_id={device_id}")
                 else:
@@ -678,19 +703,22 @@ class BasePlugin:
             Domoticz.Error(f"Error handling event: {e}")
     
     def updateZoneDevice(self, zone_id: int, zone_name: str, state: Dict[str, Any]):
-        """Create or update Domoticz devices for a zone using Extended Framework
+        """Create or update Domoticz devices for a zone
         
-        Extended Framework hierarchy using DeviceID with sub-units:
-        - Zone X uses Unit = zone_id (1, 2, 3, etc.)
-          - Sub-unit 1: Sensor (temp+humidity)
-          - Sub-unit 2: Thermostat (setpoint)
-          - Sub-unit 3: Heating indicator
-          - Sub-units 10+: Additional non-leader thermostats
+        Simple unit allocation: 5 units per zone
+        - Zone 1: Units 1-5
+        - Zone 2: Units 6-10
+        - Zone 3: Units 11-15
+        - etc.
         
-        This provides a clean hierarchy supporting unlimited zones.
-        All zone devices report battery status from the zone's leader thermostat.
+        Within each zone's 5 units:
+        - Unit 1: Temp+Humidity sensor
+        - Unit 2: Thermostat setpoint
+        - Unit 3: Heating indicator
+        - Unit 4: First additional thermostat (if present)
+        - Unit 5: Reserved
         """
-        Domoticz.Log(f"updateZoneDevice called: zone_id={zone_id}, zone_name='{zone_name}'")
+        Domoticz.Debug(f"updateZoneDevice: zone_id={zone_id}, zone_name='{zone_name}'")
         
         # Safety check - don't create/update devices if we don't have valid state
         if not state:
@@ -698,92 +726,71 @@ class BasePlugin:
             return
         
         try:
-            # Extended Framework: Use zone_id as Unit, with sub-units for device types
-            # Zone 1, Unit 1: sub-unit 1 (sensor), 2 (thermostat), 3 (heating)
-            # Zone 2, Unit 2: sub-unit 1 (sensor), 2 (thermostat), 3 (heating)
-            # etc.
-            
-            # Sanity check: limit zone_id to reasonable range to prevent crashes
-            MAX_ZONE_ID = 1000  # Practical limit - most users have <50 zones
-            if zone_id > MAX_ZONE_ID:
-                Domoticz.Log(f"Skipping zone_id={zone_id} ('{zone_name}'): exceeds maximum supported zone ID {MAX_ZONE_ID}")
+            # Calculate base unit: Zone 1 → Unit 1, Zone 2 → Unit 6, Zone 3 → Unit 11, etc.
+            # Formula: base_unit = (zone_id - 1) * 5 + 1
+            MAX_ZONES = 51  # 51 zones × 5 units = 255 max units
+            if zone_id < 1 or zone_id > MAX_ZONES:
+                Domoticz.Error(f"Zone ID {zone_id} out of range (1-{MAX_ZONES})")
                 return
             
-            unit = zone_id
-            temp_subunit = 1      # Temp+Humidity sensor
-            setpoint_subunit = 2   # Thermostat setpoint
-            heating_subunit = 3    # Heating status indicator
+            base_unit = (zone_id - 1) * 5 + 1
+            temp_unit = base_unit          # Unit 1, 6, 11, 16, etc.
+            thermostat_unit = base_unit + 1  # Unit 2, 7, 12, 17, etc.
+            heating_unit = base_unit + 2     # Unit 3, 8, 13, 18, etc.
             
-            # Check if we already have devices for this zone
+            Domoticz.Debug(f"Zone {zone_id} '{zone_name}' uses units {base_unit}-{base_unit+4}")
+            
+            # Cache zone info for control commands
             if zone_id not in self.zones_cache:
-                self.zones_cache[zone_id] = {
-                    'unit': unit,
-                    'name': zone_name
-                }
+                self.zones_cache[zone_id] = {}
+            self.zones_cache[zone_id].update({
+                'name': zone_name,
+                'base_unit': base_unit,
+                'thermostat_unit': thermostat_unit
+            })
             
-            # Create temperature + humidity device if needed (Unit X, Sub-unit 1)
-            device_key = (unit, temp_subunit)
-            if device_key not in self.device_creation_attempted:
-                self.device_creation_attempted.add(device_key)
-                
+            # Create temperature + humidity sensor if needed
+            if temp_unit not in self.device_creation_attempted and temp_unit not in Devices:
+                self.device_creation_attempted.add(temp_unit)
                 try:
-                    # Try to create - will fail silently if already exists
                     Domoticz.Device(
                         Name=f"{zone_name}",
-                        Unit=unit,
-                        DeviceID=f"{unit}:{temp_subunit}",  # Extended Framework ID with sub-unit
+                        Unit=temp_unit,
                         TypeName="Temp+Hum",
                         Used=1 if self.auto_enable_devices else 0
                     ).Create()
-                    Domoticz.Log(f"Created temperature sensor for zone: {zone_name} (Unit {unit}, Sub-unit {temp_subunit})")
+                    Domoticz.Log(f"Created temperature sensor: {zone_name} (Unit {temp_unit})")
                 except Exception as e:
-                    # Device already exists - this is normal and not an error
-                    Domoticz.Debug(f"Temp sensor ({unit}:{temp_subunit}) for {zone_name} already exists")
-            else:
-                Domoticz.Debug(f"Skipping temp sensor for {zone_name} - already attempted in this session")
+                    Domoticz.Debug(f"Temp sensor (Unit {temp_unit}) already exists: {e}")
             
-            # Create thermostat setpoint device if needed (Unit X, Sub-unit 2)
-            device_key = (unit, setpoint_subunit)
-            if device_key not in self.device_creation_attempted:
-                self.device_creation_attempted.add(device_key)
-                
+            # Create thermostat setpoint device if needed
+            if thermostat_unit not in self.device_creation_attempted and thermostat_unit not in Devices:
+                self.device_creation_attempted.add(thermostat_unit)
                 try:
-                    # Use Thermostat Setpoint device - allows continuous temperature selection
                     Domoticz.Device(
                         Name=f"{zone_name} Thermostat",
-                        Unit=unit,
-                        DeviceID=f"{unit}:{setpoint_subunit}",  # Extended Framework ID with sub-unit
+                        Unit=thermostat_unit,
                         Type=242,
                         Subtype=1,
                         Used=1 if self.auto_enable_devices else 0
                     ).Create()
-                    
-                    Domoticz.Log(f"Created thermostat for zone: {zone_name} (Unit {unit}, Sub-unit {setpoint_subunit})")
+                    Domoticz.Log(f"Created thermostat: {zone_name} (Unit {thermostat_unit})")
                 except Exception as e:
-                    Domoticz.Debug(f"Thermostat ({unit}:{setpoint_subunit}) for {zone_name} already exists")
-            else:
-                Domoticz.Debug(f"Skipping thermostat for {zone_name} - already attempted")
+                    Domoticz.Debug(f"Thermostat (Unit {thermostat_unit}) already exists: {e}")
             
-            # Create heating status indicator (Unit X, Sub-unit 3)
-            device_key = (unit, heating_subunit)
-            if device_key not in self.device_creation_attempted:
-                self.device_creation_attempted.add(device_key)
-                
+            # Create heating status indicator if needed
+            if heating_unit not in self.device_creation_attempted and heating_unit not in Devices:
+                self.device_creation_attempted.add(heating_unit)
                 try:
-                    # Use switch to show heating on/off status
                     Domoticz.Device(
                         Name=f"{zone_name} Heating",
-                        Unit=unit,
-                        DeviceID=f"{unit}:{heating_subunit}",  # Extended Framework ID with sub-unit
+                        Unit=heating_unit,
                         TypeName="Switch",
                         Used=1 if self.auto_enable_devices else 0
                     ).Create()
-                    
-                    Domoticz.Log(f"Created heating indicator for zone: {zone_name} (Unit {unit}, Sub-unit {heating_subunit})")
+                    Domoticz.Log(f"Created heating indicator: {zone_name} (Unit {heating_unit})")
                 except Exception as e:
-                    Domoticz.Debug(f"Heating indicator ({unit}:{heating_subunit}) for {zone_name} already exists")
-            else:
-                Domoticz.Debug(f"Skipping heating indicator for {zone_name} - already attempted")
+                    Domoticz.Debug(f"Heating indicator (Unit {heating_unit}) already exists: {e}")
             
             # Extract state values
             cur_temp = state.get('cur_temp_c')
@@ -805,119 +812,92 @@ class BasePlugin:
             # Determine battery level (255 = normal, <20 = low)
             battery_level = 20 if battery_low else 255
             
-            # Update temperature + humidity device (Unit X, Sub-unit 1)
-            if (unit, temp_subunit) in Devices and cur_temp is not None:
+            # Update temperature + humidity sensor
+            if temp_unit in Devices:
                 temp_status = "Normal" if not battery_low else "Low Battery"
                 sValue = f"{cur_temp};{humidity};{temp_status}"
-                
-                Devices[(unit, temp_subunit)].Update(
+                Devices[temp_unit].Update(
                     nValue=0,
                     sValue=sValue,
                     BatteryLevel=battery_level,
                     TimedOut=0
                 )
-                Domoticz.Debug(f"Updated {zone_name} temp sensor: {cur_temp}°C, {humidity}%")
+                Domoticz.Debug(f"Updated {zone_name} temp: {cur_temp}°C, {humidity}%")
             
-            # Update thermostat setpoint device (Unit X, Sub-unit 2)
-            # When mode=0 (Off), set target to 0
-            # Otherwise use actual target temperature
-            if (unit, setpoint_subunit) in Devices:
+            # Update thermostat setpoint
+            if thermostat_unit in Devices:
                 setpoint_temp = target_temp if mode != 0 else 0.0
-                
-                # Thermostat setpoint uses sValue as just the temperature
-                Domoticz.Log(f"Updating {zone_name} thermostat: setpoint={setpoint_temp}°C, mode={mode}")
-                
-                try:
-                    Devices[(unit, setpoint_subunit)].Update(
-                        nValue=0,
-                        sValue=str(setpoint_temp),
-                        BatteryLevel=battery_level,
-                        TimedOut=0
-                    )
-                except Exception as e:
-                    Domoticz.Error(f"Failed to update thermostat unit {unit} sub {setpoint_subunit}: {e}")
+                Domoticz.Debug(f"Updating {zone_name} thermostat: setpoint={setpoint_temp}°C, mode={mode}")
+                Devices[thermostat_unit].Update(
+                    nValue=0,
+                    sValue=str(setpoint_temp),
+                    BatteryLevel=battery_level,
+                    TimedOut=0
+                )
             
-            # Update heating status indicator (Unit X, Sub-unit 3)
-            if (unit, heating_subunit) in Devices:
-                # cur_heating: 0=Off, 1=Heating, 2=Idle (on but not heating)
-                # For switch: nValue=1 means On (heating), nValue=0 means Off
+            # Update heating status indicator
+            if heating_unit in Devices:
+                # cur_heating: 0=Off, 1=Heating, 2=Idle
                 is_heating = (cur_heating == 1)
-                
-                Domoticz.Log(f"Updating {zone_name} heating status: {'ON' if is_heating else 'OFF'} (cur_heating={cur_heating})")
-                
-                try:
-                    Devices[(unit, heating_subunit)].Update(
-                        nValue=1 if is_heating else 0,
-                        sValue="On" if is_heating else "Off",
-                        BatteryLevel=battery_level,
-                        TimedOut=0
-                    )
-                except Exception as e:
-                    Domoticz.Error(f"Failed to update heating status unit {unit} sub {heating_subunit}: {e}")
+                Domoticz.Debug(f"Updating {zone_name} heating: {'ON' if is_heating else 'OFF'}")
+                Devices[heating_unit].Update(
+                    nValue=1 if is_heating else 0,
+                    sValue="On" if is_heating else "Off",
+                    BatteryLevel=battery_level,
+                    TimedOut=0
+                )
         
         except Exception as e:
             Domoticz.Error(f"Error updating zone device: {e}")
     
     def updateThermostatDevice(self, device_id: int, zone_id: int, zone_name: str, serial_number: str, state: Dict[str, Any]):
-        """Create or update Domoticz temp+hum sensor for individual thermostats (non-leaders)
+        """Create or update Domoticz temp+hum sensor for additional thermostats (non-leaders)
         
-        Extended Framework hierarchy:
-        - Additional non-leader thermostats use same Unit as zone, with sub-units starting at 10
-        - Zone X, device_id 0 -> Unit X, Sub-unit 10
-        - Zone X, device_id 1 -> Unit X, Sub-unit 11
-        - etc.
-        
-        This keeps all zone devices logically grouped under the same Unit.
+        Uses Unit 4 within the zone's 5-unit block for the first additional thermostat.
+        Additional thermostats beyond the first are ignored (Unit 5 reserved).
         """
         Domoticz.Debug(f"updateThermostatDevice: device_id={device_id}, zone_id={zone_id}, zone={zone_name}, serial={serial_number}")
         
-        # Safety check - don't create/update devices if we don't have valid state
+        # Safety check
         if not state:
             Domoticz.Debug(f"Skipping updateThermostatDevice for device {device_id} - no state data")
             return
         
         try:
-            # Use zone's unit with sub-units starting at 10 for additional thermostats
-            # Zone devices use sub-units 1-3, additional thermostats use 10+
-            unit = zone_id
-            subunit = 10 + device_id
-            
-            # Sanity check: limit sub-unit numbers to prevent crashes
-            # Most users only need the main zone devices (sub-units 1-3)
-            # Limit additional thermostats to reasonable range
-            MAX_SUBUNIT = 100  # Allow up to 90 additional thermostats per zone
-            if subunit > MAX_SUBUNIT:
-                Domoticz.Log(f"Skipping thermostat device_id={device_id} for zone {zone_id}: sub-unit {subunit} exceeds limit {MAX_SUBUNIT}")
-                Domoticz.Log(f"Too many additional thermostats in zone '{zone_name}'. Only the first {MAX_SUBUNIT - 10} will be created.")
+            # Calculate base unit for this zone
+            MAX_ZONES = 51
+            if zone_id < 1 or zone_id > MAX_ZONES:
+                Domoticz.Debug(f"Zone ID {zone_id} out of range for additional thermostat")
                 return
             
-            # Create temperature + humidity device if needed
-            device_key = (unit, subunit)
-            if device_key not in self.device_creation_attempted:
-                self.device_creation_attempted.add(device_key)
-                
+            base_unit = (zone_id - 1) * 5 + 1
+            extra_unit = base_unit + 3  # Unit 4 within the zone's block
+            
+            # Only create device for the first additional thermostat
+            # We use Unit 4, which leaves Unit 5 reserved for future use
+            Domoticz.Debug(f"Additional thermostat for zone {zone_id} uses Unit {extra_unit}")
+            
+            # Create temperature + humidity sensor if needed
+            if extra_unit not in self.device_creation_attempted and extra_unit not in Devices:
+                self.device_creation_attempted.add(extra_unit)
                 try:
-                    # Create device with zone + serial name for identification
                     device_name = f"{zone_name} ({serial_number[-4:]})"
                     Domoticz.Device(
                         Name=device_name,
-                        Unit=unit,
-                        DeviceID=f"{unit}:{subunit}",  # Extended Framework ID with sub-unit
+                        Unit=extra_unit,
                         TypeName="Temp+Hum",
                         Used=1 if self.auto_enable_devices else 0
                     ).Create()
-                    Domoticz.Log(f"Created thermostat sensor: {device_name} (Unit {unit}, Sub-unit {subunit})")
+                    Domoticz.Log(f"Created additional thermostat sensor: {device_name} (Unit {extra_unit})")
                 except Exception as e:
-                    Domoticz.Debug(f"Thermostat sensor ({unit}:{subunit}) already exists")
-            else:
-                Domoticz.Debug(f"Skipping thermostat sensor ({unit}:{subunit}) - already attempted")
+                    Domoticz.Debug(f"Additional thermostat (Unit {extra_unit}) already exists: {e}")
             
             # Extract state values
             cur_temp = state.get('cur_temp_c')
             humidity = state.get('hum_perc', 50)
             battery_low = state.get('battery_low', False)
             
-            # Skip update if critical values are missing
+            # Skip update if critical values missing
             if cur_temp is None:
                 Domoticz.Debug(f"Skipping update for device {device_id} - no temperature data")
                 return
@@ -926,15 +906,14 @@ class BasePlugin:
             if humidity is None or humidity < 0 or humidity > 100:
                 humidity = 50
             
-            # Determine battery level (255 = normal, <20 = low)
+            # Determine battery level
             battery_level = 20 if battery_low else 255
             
-            # Update temperature + humidity device
-            if (unit, subunit) in Devices and cur_temp is not None:
+            # Update temperature + humidity sensor
+            if extra_unit in Devices:
                 temp_status = "Normal" if not battery_low else "Low Battery"
                 sValue = f"{cur_temp};{humidity};{temp_status}"
-                
-                Devices[(unit, subunit)].Update(
+                Devices[extra_unit].Update(
                     nValue=0,
                     sValue=sValue,
                     BatteryLevel=battery_level,
