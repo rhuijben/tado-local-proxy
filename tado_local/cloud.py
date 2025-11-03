@@ -19,6 +19,13 @@
 API Call Strategy (optimized for rate limits):
 ==============================================
 
+User-Agent Identification:
+-------------------------
+- All API requests include User-Agent header: "TadoLocal/{version} (+https://github.com/ampscm/TadoLocal)"
+- Purpose: Identify TadoLocal to Tado's servers for potential API change notifications
+- Communication channel: GitHub repository link allows Tado to contact maintainers if needed
+- Applied to: OAuth authentication, token refresh, and all API data requests
+
 Token Management:
 -----------------
 - Access tokens: Valid for 10 minutes (600s)
@@ -41,8 +48,9 @@ Data Caching & Sync:
 
 Rate Limit Budget:
 ------------------
-- Free tier (post-2024): ~100 calls/day
-- Subscriber tier: ~18,000 calls/day
+- Free tier as documented (post-2025): ~100 calls/day
+- Free tier currently (Nov 2025): ~18000 calls/day. Probably temporary, moving towards that ~100 calls/day
+- Subscriber tier: ~20,000 calls/day
 - Current usage: ~4-8 calls/day (1 daily sync, token refresh only when needed)
 - Note: Token refresh calls may not count against data call limits
 - Recommendation: Monitor rate_limit headers and adjust sync interval if needed
@@ -67,6 +75,7 @@ from datetime import datetime, timedelta
 import sqlite3
 import json
 from .database import CLOUD_SCHEMA
+from .__version__ import __version__
 if TYPE_CHECKING:
     import aiohttp
 
@@ -192,6 +201,9 @@ class TadoCloudAPI:
     AUTH_BASE_URL = "https://login.tado.com/oauth2"
     API_BASE_URL = "https://my.tado.com/api/v2"
     CLIENT_ID = "1bb50063-6b0c-4d11-bd99-387f4a91cc46"
+    
+    # User-Agent for API identification and communication channel
+    USER_AGENT = f"TadoLocal/{__version__} (+https://github.com/ampscm/TadoLocal)"
 
     def __init__(self, db_path: str):
         """Initialize Tado Cloud API client.
@@ -313,7 +325,8 @@ class TadoCloudAPI:
                     params={
                         'client_id': self.CLIENT_ID,
                         'scope': 'offline_access'
-                    }
+                    },
+                    headers={'User-Agent': self.USER_AGENT}
                 ) as resp:
                     if resp.status != 200:
                         error_text = await resp.text()
@@ -367,7 +380,8 @@ class TadoCloudAPI:
                             'client_id': self.CLIENT_ID,
                             'device_code': device_code,
                             'grant_type': 'urn:ietf:params:oauth:grant-type:device_code'
-                        }
+                        },
+                        headers={'User-Agent': self.USER_AGENT}
                     ) as resp:
                         token_data = await resp.json()
 
@@ -500,7 +514,8 @@ class TadoCloudAPI:
                         'client_id': self.CLIENT_ID,
                         'refresh_token': self.refresh_token,
                         'grant_type': 'refresh_token'
-                    }
+                    },
+                    headers={'User-Agent': self.USER_AGENT}
                 ) as resp:
                     if resp.status == 200:
                         token_data = await resp.json()
@@ -710,14 +725,15 @@ class TadoCloudAPI:
         Ensures token is valid before returning (lazy refresh).
 
         Returns:
-            Headers dict with Authorization bearer token
+            Headers dict with Authorization bearer token and User-Agent
         """
         if not await self.ensure_authenticated():
             raise RuntimeError("Failed to authenticate with Tado Cloud API")
 
         return {
             'Authorization': f'Bearer {self.access_token}',
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'User-Agent': self.USER_AGENT
         }
 
     def _update_rate_limit(self, headers: Dict[str, str]):
