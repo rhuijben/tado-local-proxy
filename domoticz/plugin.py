@@ -899,7 +899,7 @@ class BasePlugin:
             if extra_unit in Devices:
                 temp_status = "Normal" if not battery_low else "Low Battery"
                 sValue = f"{cur_temp};{humidity};{temp_status}"
-                Devices[extra_unit].Update(nValue=0, sValue=sValue, BatteryLevel=battery_level)
+                Devices[extra_unit].Update(nValue=0, sValue=sValue, BatteryLevel=int(battery_level))
                 Domoticz.Debug(f"Updated thermostat {device_id} sensor: {cur_temp}°C, {humidity}%, battery: {battery_level}")
         
         except Exception as e:
