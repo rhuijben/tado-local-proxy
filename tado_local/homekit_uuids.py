@@ -119,18 +119,12 @@ HOMEKIT_CHARACTERISTICS = {
     "00000090-0000-1000-8000-0026BB765291": "CarbonDioxideLevel",
     "00000091-0000-1000-8000-0026BB765291": "CarbonDioxidePeakLevel",
     
-    # Battery and Status
-    "00000068-0000-1000-8000-0026BB765291": "BatteryLevel",
+    # Battery and Status (additional)
     "0000008F-0000-1000-8000-0026BB765291": "ChargingState",
-    "00000079-0000-1000-8000-0026BB765291": "StatusLowBattery",
-    "00000075-0000-1000-8000-0026BB765291": "StatusActive",
-    "00000077-0000-1000-8000-0026BB765291": "StatusFault",
     "00000078-0000-1000-8000-0026BB765291": "StatusJammed",
     "0000007A-0000-1000-8000-0026BB765291": "StatusTampered",
     
     # Version and Configuration
-    "00000037-0000-1000-8000-0026BB765291": "Version",
-    "00000052-0000-1000-8000-0026BB765291": "FirmwareRevision",
     "00000050-0000-1000-8000-0026BB765291": "AdminOnlyAccess",
     "0000004C-0000-1000-8000-0026BB765291": "PairSetup",
     "0000004E-0000-1000-8000-0026BB765291": "PairVerify",
@@ -142,7 +136,8 @@ HOMEKIT_CHARACTERISTICS = {
     "000000C5-0000-1000-8000-0026BB765291": "LockControlPoint",
     "000000C6-0000-1000-8000-0026BB765291": "LockManagementAutoSecurityTimeout",
     "000000C7-0000-1000-8000-0026BB765291": "LockLastKnownAction",
-    "000000C8-0000-1000-8000-0026BB765291": "LockCurrentValidConfiguration",
+    # Note: UUID C8 conflicts with VOCDensity above, keeping VOCDensity as it's more relevant for Tado
+    # "000000C8-0000-1000-8000-0026BB765291": "LockCurrentValidConfiguration",
     "000000C9-0000-1000-8000-0026BB765291": "LockSupportedConfiguration",
 }
 

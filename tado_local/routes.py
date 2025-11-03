@@ -25,12 +25,11 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse, FileResponse, HTMLResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .__version__ import __version__
 from .homekit_uuids import enhance_accessory_data
-from .state import DeviceStateManager
 
 # Configure logging
 logger = logging.getLogger('tado-local')

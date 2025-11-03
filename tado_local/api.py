@@ -19,7 +19,6 @@
 import asyncio
 import json
 import logging
-import sqlite3
 import time
 from collections import defaultdict
 from typing import Dict, List, Any, Optional
@@ -28,7 +27,7 @@ from fastapi import HTTPException
 from aiohomekit.controller.ip.pairing import IpPairing
 
 from .state import DeviceStateManager
-from .homekit_uuids import get_service_name, get_characteristic_name
+from .homekit_uuids import get_characteristic_name
 
 # Configure logging
 logger = logging.getLogger('tado-local')

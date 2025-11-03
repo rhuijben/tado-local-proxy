@@ -58,8 +58,11 @@ jobs:
       run: |
         python -m py_compile setup.py
         python -m py_compile local.py
-        python -m py_compile td-mgr.py
         python -m py_compile homekit_uuids.py
+
+    - name: Check demo scripts syntax
+      run: |
+        python -m py_compile demos/zone-manager.py
 
     - name: Verify Domoticz plugin syntax (basic check)
       run: |

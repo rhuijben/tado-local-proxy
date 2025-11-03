@@ -18,7 +18,7 @@
 
 import logging
 import sqlite3
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 
 logger = logging.getLogger('tado-local')
 

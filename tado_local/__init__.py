@@ -31,6 +31,7 @@ from .sync import TadoCloudSync
 from . import homekit_uuids
 
 __all__ = [
+    "__version__",
     "CharacteristicCacheSQLite",
     "DB_SCHEMA",
     "HOMEKIT_SCHEMA",
