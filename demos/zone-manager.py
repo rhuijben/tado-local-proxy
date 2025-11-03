@@ -97,12 +97,11 @@ def show_list(verbose, zones):
         for home in home_info:
             home_name = home.get('name', 'Unknown Home')
             print(f"== {home_name} ==")
-            print()
     
     # Display header
     if verbose == 0:
-        print("ID   Zone Name     Heat  Temp   Mode      Current   Humidity")
-        print("-" * 70)
+        print("ID  Zone Name       Heat  Target   Status    Current  Humidity")
+        print("--  --------------  ----  -------  --------  -------  --------")
     
     for zone_data in display_zones:
         zone_id = zone_data['zone_id']
@@ -116,11 +115,11 @@ def show_list(verbose, zones):
         state = zone_data.get('state', {})
         cur_temp = state.get('cur_temp_c')
         cur_hum = state.get('hum_perc')
-        heating_active = state.get('cur_heating') == 1
-        mode = state.get('mode', 0)
+        cur_heating = state.get('cur_heating', 0)  # 0=off, 1=heating, 2=cooling
+        mode = state.get('mode', 0)  # mode: 0=OFF, 1=ON (enabled)
         target_temp = state.get('target_temp_c')
         
-        # Format setting
+        # Format target temperature
         if mode == 0:
             setting = 'OFF'
         elif target_temp is not None:
@@ -128,22 +127,24 @@ def show_list(verbose, zones):
         else:
             setting = 'AUTO'
 
-        # Heating status
-        heat_s = 'ON ' if heating_active else '    '
+        # Activity indicator (for Heat column)
+        heat_s = 'ON' if cur_heating > 0 else ''
 
-        # Mode description
-        if mode == 1:
-            mode_str = 'HEAT'
-        elif mode == 0:
-            mode_str = 'OFF'
+        # Activity status (what the system is doing)
+        if mode == 0:
+            status_str = 'OFF'
+        elif cur_heating == 1:
+            status_str = 'HEAT'
+        elif cur_heating == 2:
+            status_str = 'COOL'
         else:
-            mode_str = f'MODE{mode}'
+            status_str = 'IDLE'
 
         # Format output
         if cur_temp is not None and cur_hum is not None:
-            print(f'{zone_id:<4} {zone_data["name"]:<13} {heat_s} {setting:<6} {mode_str:<9} {cur_temp:5.1f}°C  {cur_hum:5.1f}%')
+            print(f'{zone_id:<2}  {zone_data["name"]:<14}  {heat_s:>4}  {setting:>7}  {status_str:<8}  {cur_temp:5.1f}°C  {cur_hum:5.1f}%')
         else:
-            print(f'{zone_id:<4} {zone_data["name"]:<13} - No data available')
+            print(f'{zone_id:<2}  {zone_data["name"]:<14}  {"":>4}  {"":>7}  {"-":<8}  {"":>5}     {"":>5}')
     
     print()
 
