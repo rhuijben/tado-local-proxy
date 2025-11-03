@@ -1164,11 +1164,14 @@ def register_routes(app: FastAPI, get_tado_api):
                "timestamp": 1730477890.123
            }
 
-        3. Keepalive (every 30 seconds):
+        3. Keepalive (every 90 seconds for connections without refresh_interval):
            {
                "type": "keepalive",
                "timestamp": 1730477890.123
            }
+
+        Note: Connections with refresh_interval don't receive keepalives - refresh events
+        act as keepalives. This reduces unnecessary traffic for clients like Domoticz.
 
         State Field Reference:
             mode: 0=Off, 1=Heat, 2=Cool, 3=Auto (TargetHeatingCoolingState)
@@ -1203,6 +1206,8 @@ def register_routes(app: FastAPI, get_tado_api):
             tado_api.event_listeners.append(client_queue)
 
             last_refresh = time.time() if refresh_interval else None
+            last_keepalive = time.time()
+            keepalive_interval = 90  # 90 seconds - works with most proxies/firewalls
 
             try:
                 while True:
@@ -1211,7 +1216,9 @@ def register_routes(app: FastAPI, get_tado_api):
                         time_since_refresh = time.time() - last_refresh
                         timeout = max(1, refresh_interval - time_since_refresh)
                     else:
-                        timeout = 30
+                        # Use keepalive interval when no refresh (for browsers)
+                        time_since_keepalive = time.time() - last_keepalive
+                        timeout = max(1, keepalive_interval - time_since_keepalive)
 
                     # Wait for events
                     try:
@@ -1238,10 +1245,13 @@ def register_routes(app: FastAPI, get_tado_api):
                         # Reset refresh timer on any event
                         if refresh_interval:
                             last_refresh = time.time()
+                        else:
+                            last_keepalive = time.time()
 
                     except asyncio.TimeoutError:
                         # Check if we should send a refresh update
-                        if refresh_interval and last_refresh and (time.time() - last_refresh >= refresh_interval):
+                        # When refresh_interval is set, timeout aligns with it, so we always refresh on timeout
+                        if refresh_interval:
                             # Send refresh updates for all zones (if zone type is allowed or no filter)
                             if not allowed_types or 'zone' in allowed_types:
                                 conn = sqlite3.connect(tado_api.state_manager.db_path)
@@ -1295,11 +1305,46 @@ def register_routes(app: FastAPI, get_tado_api):
                                         }
                                         yield f"data: {json.dumps(event_obj)}\n\n"
 
+                            # Send refresh updates for devices (all devices) if device type is allowed
+                            if not allowed_types or 'device' in allowed_types:
+                                # Get all devices (let clients filter for leaders/non-leaders)
+                                for device_id, device_info in tado_api.state_manager.device_info_cache.items():
+                                    device_state = tado_api.state_manager.get_current_state(device_id)
+                                    
+                                    if device_state:
+                                        zone_id = device_info.get('zone_id')
+                                        zone_info = tado_api.state_manager.zone_cache.get(zone_id) if zone_id else None
+                                        zone_name = zone_info.get('name') if zone_info else f'Zone {zone_id}' if zone_id else 'Unknown'
+                                        
+                                        # Build simplified state for SSE
+                                        state = {
+                                            'cur_temp_c': device_state.get('current_temperature'),
+                                            'hum_perc': device_state.get('humidity'),
+                                            'battery_low': device_state.get('battery_low', False)
+                                        }
+                                        
+                                        serial = device_info.get('serial_number', '')
+                                        
+                                        event_obj = {
+                                            'type': 'device',
+                                            'device_id': device_id,
+                                            'zone_id': zone_id,
+                                            'zone_name': zone_name,
+                                            'serial_number': serial,
+                                            'state': state,
+                                            'timestamp': time.time(),
+                                            'refresh': True
+                                        }
+                                        yield f"data: {json.dumps(event_obj)}\n\n"
+
                             last_refresh = time.time()
                         else:
-                            # Send keepalive
-                            keepalive_obj = {'type': 'keepalive', 'timestamp': time.time()}
-                            yield f"data: {json.dumps(keepalive_obj)}\n\n"
+                            # Only send keepalive if we're not doing refreshes
+                            # (refresh events already act as keepalives)
+                            if time.time() - last_keepalive >= keepalive_interval:
+                                keepalive_obj = {'type': 'keepalive', 'timestamp': time.time()}
+                                yield f"data: {json.dumps(keepalive_obj)}\n\n"
+                                last_keepalive = time.time()
 
             except asyncio.CancelledError:
                 logger.debug("SSE stream cancelled")
