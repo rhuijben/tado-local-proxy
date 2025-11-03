@@ -73,9 +73,6 @@ Current API: {API_BASE}
     return parser
 
 
-def show_help():
-    """Deprecated: help is now handled by argparse"""
-    pass
 def show_list(verbose, zones):
     """Display zone information"""
     global zone_info, home_info
@@ -145,8 +142,6 @@ def show_list(verbose, zones):
             print(f'{zone_id:<2}  {zone_data["name"]:<14}  {heat_s:>4}  {setting:>7}  {status_str:<8}  {cur_temp:5.1f}°C  {cur_hum:5.1f}%')
         else:
             print(f'{zone_id:<2}  {zone_data["name"]:<14}  {"":>4}  {"":>7}  {"-":<8}  {"":>5}     {"":>5}')
-    
-    print()
 
 
 def set_temperature(zones, temp):
