@@ -809,43 +809,29 @@ class BasePlugin:
             if humidity is None or humidity < 0 or humidity > 100:
                 humidity = 50
             
-            # Determine battery level (255 = normal, <20 = low)
-            battery_level = 20 if battery_low else 255
+            # Determine battery level from battery_low flag
+            # Domoticz: 255 = normal/full, 0-100 = percentage, <20 = low warning
+            battery_level = 10 if battery_low else 255
             
             # Update temperature + humidity sensor
             if temp_unit in Devices:
                 temp_status = "Normal" if not battery_low else "Low Battery"
                 sValue = f"{cur_temp};{humidity};{temp_status}"
-                Devices[temp_unit].Update(
-                    nValue=0,
-                    sValue=sValue,
-                    BatteryLevel=battery_level,
-                    TimedOut=0
-                )
-                Domoticz.Debug(f"Updated {zone_name} temp: {cur_temp}°C, {humidity}%")
+                Devices[temp_unit].Update(nValue=0, sValue=sValue, BatteryLevel=battery_level)
+                Domoticz.Debug(f"Updated {zone_name} temp: {cur_temp}°C, {humidity}%, battery: {battery_level}")
             
             # Update thermostat setpoint
             if thermostat_unit in Devices:
                 setpoint_temp = target_temp if mode != 0 else 0.0
                 Domoticz.Debug(f"Updating {zone_name} thermostat: setpoint={setpoint_temp}°C, mode={mode}")
-                Devices[thermostat_unit].Update(
-                    nValue=0,
-                    sValue=str(setpoint_temp),
-                    BatteryLevel=battery_level,
-                    TimedOut=0
-                )
+                Devices[thermostat_unit].Update(nValue=0, sValue=str(setpoint_temp), BatteryLevel=battery_level)
             
             # Update heating status indicator
             if heating_unit in Devices:
                 # cur_heating: 0=Off, 1=Heating, 2=Idle
                 is_heating = (cur_heating == 1)
                 Domoticz.Debug(f"Updating {zone_name} heating: {'ON' if is_heating else 'OFF'}")
-                Devices[heating_unit].Update(
-                    nValue=1 if is_heating else 0,
-                    sValue="On" if is_heating else "Off",
-                    BatteryLevel=battery_level,
-                    TimedOut=0
-                )
+                Devices[heating_unit].Update(nValue=1 if is_heating else 0, sValue="On" if is_heating else "Off", BatteryLevel=battery_level)
         
         except Exception as e:
             Domoticz.Error(f"Error updating zone device: {e}")
@@ -906,20 +892,15 @@ class BasePlugin:
             if humidity is None or humidity < 0 or humidity > 100:
                 humidity = 50
             
-            # Determine battery level
-            battery_level = 20 if battery_low else 255
+            # Determine battery level from battery_low flag
+            battery_level = 10 if battery_low else 255
             
             # Update temperature + humidity sensor
             if extra_unit in Devices:
                 temp_status = "Normal" if not battery_low else "Low Battery"
                 sValue = f"{cur_temp};{humidity};{temp_status}"
-                Devices[extra_unit].Update(
-                    nValue=0,
-                    sValue=sValue,
-                    BatteryLevel=battery_level,
-                    TimedOut=0
-                )
-                Domoticz.Debug(f"Updated thermostat {device_id} sensor: {cur_temp}°C, {humidity}%")
+                Devices[extra_unit].Update(nValue=0, sValue=sValue, BatteryLevel=battery_level)
+                Domoticz.Debug(f"Updated thermostat {device_id} sensor: {cur_temp}°C, {humidity}%, battery: {battery_level}")
         
         except Exception as e:
             Domoticz.Error(f"Error updating thermostat device: {e}")
