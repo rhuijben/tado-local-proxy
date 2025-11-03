@@ -13,15 +13,27 @@ import requests
 # Configuration
 API_BASE = os.environ.get('TADO_LOCAL_API', 'http://localhost:4407')
 
+# Authentication - use first API key from TADO_API_KEYS if available
+API_KEYS_RAW = os.environ.get('TADO_API_KEYS', '').strip()
+API_KEY = API_KEYS_RAW.split()[0] if API_KEYS_RAW else None
+
 zone_info = {}
 home_info = {}
 verbose = 0
 
 
+def get_headers():
+    """Get HTTP headers including optional Bearer token authentication"""
+    headers = {'Content-Type': 'application/json'}
+    if API_KEY:
+        headers['Authorization'] = f'Bearer {API_KEY}'
+    return headers
+
+
 def get_zones_and_homes():
     """Get all zones and homes from Tado Local API"""
     try:
-        response = requests.get(f"{API_BASE}/zones")
+        response = requests.get(f"{API_BASE}/zones", headers=get_headers())
         response.raise_for_status()
         data = response.json()
 
@@ -47,9 +59,11 @@ Examples:
   %(prog)s -l -v              List zones with verbose output
 
 Environment variables:
-  TADO_LOCAL_API  API base URL (default: http://localhost:4407)
+  TADO_LOCAL_API   API base URL (default: http://localhost:4407)
+  TADO_API_KEYS    Space-separated API keys (uses first key if multiple)
 
 Current API: {API_BASE}
+Authentication: {'Enabled (Bearer token)' if API_KEY else 'Disabled (no API key)'}
 ''',
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -166,7 +180,8 @@ def set_temperature(zones, temp):
 
                 response = requests.post(
                     f"{API_BASE}/zones/{zone_id}/set",
-                    json=payload
+                    json=payload,
+                    headers=get_headers()
                 )
                 response.raise_for_status()
                 result = response.json()
@@ -182,7 +197,8 @@ def set_temperature(zones, temp):
 
                 response = requests.post(
                     f"{API_BASE}/zones/{zone_id}/set",
-                    json=payload
+                    json=payload,
+                    headers=get_headers()
                 )
                 response.raise_for_status()
 
@@ -220,7 +236,8 @@ def reset_to_schedule(zones):
 
                 response = requests.post(
                     f"{API_BASE}/zones/{zone_id}/set",
-                    json=payload
+                    json=payload,
+                    headers=get_headers()
                 )
                 response.raise_for_status()
 
