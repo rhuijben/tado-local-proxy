@@ -19,13 +19,15 @@
 import asyncio
 import json
 import logging
+import os
 import sqlite3
 import time
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
 
 from .__version__ import __version__
@@ -33,6 +35,49 @@ from .homekit_uuids import enhance_accessory_data
 
 # Configure logging
 logger = logging.getLogger('tado-local')
+
+# Security
+security = HTTPBearer(auto_error=False)
+
+# API key configuration (from environment variable)
+# Multiple keys can be specified, space-separated
+API_KEYS_RAW = os.environ.get('TADO_API_KEYS', '').strip()
+API_KEYS = set(key.strip() for key in API_KEYS_RAW.split() if key.strip()) if API_KEYS_RAW else set()
+
+def get_api_key(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> Optional[str]:
+    """
+    Validate API key from Authorization header.
+    
+    If API keys are configured (TADO_API_KEYS environment variable), checks Bearer token.
+    If no API keys are configured, authentication is disabled (backward compatible).
+    
+    Returns:
+        The validated API key, or None if authentication is disabled
+        
+    Raises:
+        HTTPException 401 if authentication fails
+    """
+    # If no API keys configured, authentication is disabled
+    if not API_KEYS:
+        return None
+    
+    # API keys are configured, so authentication is required
+    if not credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authentication credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # Check if the provided token matches any configured key
+    if credentials.credentials not in API_KEYS:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    return credentials.credentials
 
 
 def create_app():
@@ -42,6 +87,12 @@ def create_app():
         description="Local REST API for Tado devices via HomeKit bridge",
         version=__version__
     )
+    
+    # Log authentication status
+    if API_KEYS:
+        logger.info(f"✓ API authentication enabled ({len(API_KEYS)} key(s) configured)")
+    else:
+        logger.info("⚠ API authentication disabled (no TADO_API_KEYS configured)")
     
     # Mount static files
     static_dir = Path(__file__).parent / "static"
@@ -79,7 +130,7 @@ def register_routes(app: FastAPI, get_tado_api):
             }
     
     @app.get("/api", tags=["Info"])
-    async def api_info():
+    async def api_info(api_key: Optional[str] = Depends(get_api_key)):
         """API root with diagnostics and navigation."""
         return {
             "service": "Tado Local",
@@ -100,7 +151,7 @@ def register_routes(app: FastAPI, get_tado_api):
         }
 
     @app.get("/status", tags=["Status"])
-    async def get_status():
+    async def get_status(api_key: Optional[str] = Depends(get_api_key)):
         """Get overall system status."""
         tado_api = get_tado_api()
         if not tado_api or not tado_api.pairing:
@@ -171,7 +222,7 @@ def register_routes(app: FastAPI, get_tado_api):
             }
 
     @app.get("/accessories", tags=["HomeKit"])
-    async def get_accessories(enhanced: bool = True):
+    async def get_accessories(enhanced: bool = True, api_key: Optional[str] = Depends(get_api_key)):
         """
         Get all HomeKit accessories and their characteristics.
         
@@ -194,7 +245,7 @@ def register_routes(app: FastAPI, get_tado_api):
             }
 
     @app.get("/accessories/{accessory_id}", tags=["HomeKit"])  
-    async def get_accessory(accessory_id: int, enhanced: bool = True):
+    async def get_accessory(accessory_id: int, enhanced: bool = True, api_key: Optional[str] = Depends(get_api_key)):
         """
         Get specific accessory by ID.
         
@@ -224,7 +275,7 @@ def register_routes(app: FastAPI, get_tado_api):
         raise HTTPException(status_code=404, detail=f"Accessory {accessory_id} not found")
 
     @app.get("/thermostats", tags=["Thermostats"])
-    async def get_thermostats():
+    async def get_thermostats(api_key: Optional[str] = Depends(get_api_key)):
         """
         Get all thermostat devices with standardized state.
         
@@ -287,7 +338,7 @@ def register_routes(app: FastAPI, get_tado_api):
         return {"thermostats": thermostats, "count": len(thermostats)}
 
     @app.get("/thermostats/{thermostat_id}", tags=["Thermostats"])
-    async def get_thermostat(thermostat_id: int):
+    async def get_thermostat(thermostat_id: int, api_key: Optional[str] = Depends(get_api_key)):
         """Get specific thermostat by device ID with standardized state."""
         tado_api = get_tado_api()
         if not tado_api:
@@ -352,7 +403,7 @@ def register_routes(app: FastAPI, get_tado_api):
         return thermostat
 
     @app.get("/zones", tags=["Zones"])
-    async def get_zones():
+    async def get_zones(api_key: Optional[str] = Depends(get_api_key)):
         """
         Get all zones with aggregated state (no per-device details).
         
@@ -516,7 +567,7 @@ def register_routes(app: FastAPI, get_tado_api):
         }
 
     @app.post("/zones", tags=["Zones"])
-    async def create_zone(name: str, leader_device_id: Optional[int] = None, order_id: Optional[int] = None):
+    async def create_zone(name: str, leader_device_id: Optional[int] = None, order_id: Optional[int] = None, api_key: Optional[str] = Depends(get_api_key)):
         """Create a new zone."""
         tado_api = get_tado_api()
         if not tado_api:
@@ -537,7 +588,7 @@ def register_routes(app: FastAPI, get_tado_api):
         return {'zone_id': zone_id, 'name': name}
 
     @app.put("/zones/{zone_id}", tags=["Zones"])
-    async def update_zone(zone_id: int, name: Optional[str] = None, leader_device_id: Optional[int] = None, order_id: Optional[int] = None):
+    async def update_zone(zone_id: int, name: Optional[str] = None, leader_device_id: Optional[int] = None, order_id: Optional[int] = None, api_key: Optional[str] = Depends(get_api_key)):
         """Update a zone."""
         tado_api = get_tado_api()
         if not tado_api:
@@ -574,7 +625,8 @@ def register_routes(app: FastAPI, get_tado_api):
     async def set_zone(
         zone_id: int, 
         temperature: Optional[float] = None,
-        heating_enabled: Optional[bool] = None
+        heating_enabled: Optional[bool] = None,
+        api_key: Optional[str] = Depends(get_api_key)
     ):
         """
         Control a zone's heating via its leader device.
@@ -675,7 +727,7 @@ def register_routes(app: FastAPI, get_tado_api):
             raise HTTPException(status_code=500, detail=f"Failed to set zone control: {str(e)}")
 
     @app.get("/devices", tags=["Devices"])
-    async def get_devices():
+    async def get_devices(api_key: Optional[str] = Depends(get_api_key)):
         """
         Get all registered devices with standardized state.
         
@@ -733,7 +785,7 @@ def register_routes(app: FastAPI, get_tado_api):
         }
 
     @app.get("/devices/{device_id}", tags=["Devices"])
-    async def get_device(device_id: int):
+    async def get_device(device_id: int, api_key: Optional[str] = Depends(get_api_key)):
         """
         Get specific device with standardized state by ID (database device_id).
         
@@ -790,7 +842,8 @@ def register_routes(app: FastAPI, get_tado_api):
         start_time: Optional[float] = None,
         end_time: Optional[float] = None,
         limit: int = 100,
-        offset: int = 0
+        offset: int = 0,
+        api_key: Optional[str] = Depends(get_api_key)
     ):
         """
         Get device state history.
@@ -826,7 +879,8 @@ def register_routes(app: FastAPI, get_tado_api):
     async def set_device(
         device_id: int,
         temperature: Optional[float] = None,
-        heating_enabled: Optional[bool] = None
+        heating_enabled: Optional[bool] = None,
+        api_key: Optional[str] = Depends(get_api_key)
     ):
         """
         Standardized control endpoint for device heating.
@@ -887,7 +941,7 @@ def register_routes(app: FastAPI, get_tado_api):
             raise HTTPException(status_code=400, detail=f"Device {device_id} is not assigned to a zone. Assign it to a zone first.")
 
     @app.put("/devices/{device_id}/zone", tags=["Devices"])
-    async def assign_device_to_zone(device_id: int, zone_id: Optional[int] = None):
+    async def assign_device_to_zone(device_id: int, zone_id: Optional[int] = None, api_key: Optional[str] = Depends(get_api_key)):
         """Assign a device to a zone (or remove from zone if zone_id is None)."""
         tado_api = get_tado_api()
         if not tado_api:
@@ -909,7 +963,8 @@ def register_routes(app: FastAPI, get_tado_api):
         start_time: Optional[float] = None,
         end_time: Optional[float] = None,
         limit: int = 100,
-        offset: int = 0
+        offset: int = 0,
+        api_key: Optional[str] = Depends(get_api_key)
     ):
         """
         Get thermostat state history (forwarded to device history).
@@ -928,7 +983,8 @@ def register_routes(app: FastAPI, get_tado_api):
     async def set_thermostat(
         thermostat_id: int,
         temperature: Optional[float] = None,
-        heating_enabled: Optional[bool] = None
+        heating_enabled: Optional[bool] = None,
+        api_key: Optional[str] = Depends(get_api_key)
     ):
         """
         Standardized control endpoint for thermostat heating.
@@ -994,7 +1050,8 @@ def register_routes(app: FastAPI, get_tado_api):
         start_time: Optional[float] = None,
         end_time: Optional[float] = None,
         limit: int = 100,
-        offset: int = 0
+        offset: int = 0,
+        api_key: Optional[str] = Depends(get_api_key)
     ):
         """
         Get zone state history via the zone's leader device.
@@ -1041,7 +1098,7 @@ def register_routes(app: FastAPI, get_tado_api):
         return result
 
     @app.get("/events", tags=["Events"])
-    async def get_events(refresh_interval: Optional[int] = None, types: Optional[str] = None):
+    async def get_events(refresh_interval: Optional[int] = None, types: Optional[str] = None, api_key: Optional[str] = Depends(get_api_key)):
         """
         Server-Sent Events (SSE) endpoint for real-time updates.
         
@@ -1250,13 +1307,13 @@ def register_routes(app: FastAPI, get_tado_api):
         )
 
     @app.post("/refresh", tags=["Admin"])
-    async def refresh_data():
+    async def refresh_data(api_key: Optional[str] = Depends(get_api_key)):
         """Manually refresh accessories data from HomeKit bridge."""
         tado_api = get_tado_api()
         return await tado_api.refresh_accessories()
     
     @app.post("/refresh/cloud", tags=["Admin"])
-    async def refresh_cloud_data(battery_only: bool = False):
+    async def refresh_cloud_data(battery_only: bool = False, api_key: Optional[str] = Depends(get_api_key)):
         """
         Manually refresh data from Tado Cloud API.
         
