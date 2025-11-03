@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    name: Test on ${{ matrix.os }} with Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ['3.11', '3.12']
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip setuptools wheel
+        pip install -r requirements.txt
+
+    - name: Verify package can be installed
+      run: |
+        pip install -e .
+
+    - name: Verify CLI is available
+      run: |
+        tado-local --help
+
+    - name: Check Python syntax
+      run: |
+        python -m py_compile tado_local/__init__.py
+        python -m py_compile tado_local/__main__.py
+        python -m py_compile tado_local/__version__.py
+        python -m py_compile tado_local/api.py
+        python -m py_compile tado_local/bridge.py
+        python -m py_compile tado_local/cache.py
+        python -m py_compile tado_local/cloud.py
+        python -m py_compile tado_local/database.py
+        python -m py_compile tado_local/homekit_uuids.py
+        python -m py_compile tado_local/routes.py
+        python -m py_compile tado_local/state.py
+        python -m py_compile tado_local/sync.py
+
+    - name: Check main scripts syntax
+      run: |
+        python -m py_compile setup.py
+        python -m py_compile local.py
+        python -m py_compile td-mgr.py
+        python -m py_compile homekit_uuids.py
+        python -m py_compile domoticz/plugin.py
+
+    - name: Test package imports
+      run: |
+        python -c "import tado_local"
+        python -c "from tado_local import __version__"
+        python -c "from tado_local.api import TadoLocalAPI"
+        python -c "from tado_local.bridge import TadoBridge"
+        python -c "from tado_local.state import TadoStateManager"
+        python -c "from tado_local.database import Database"
+
+  lint:
+    name: Code Quality Checks
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install linting tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install ruff flake8
+
+    - name: Run Ruff
+      run: |
+        ruff check . --output-format=github || true
+
+    - name: Run Flake8
+      run: |
+        flake8 tado_local/ --count --select=E9,F63,F7,F82 --show-source --statistics || true
