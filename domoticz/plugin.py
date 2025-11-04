@@ -849,7 +849,8 @@ class BasePlugin:
   nicknames = {zone_name} Thermostat
   room = {zone_name}
   actual_temp_idx = {temp_idx}
-  selector_modes_idx = {heating_idx}
+  minThreehold = 5
+  maxThreehold = 30
 </voicecontrol>"""
                         thermostat_desc = f"{existing_desc}\n{voicecontrol_xml}" if existing_desc else voicecontrol_xml
                         Devices[thermostat_unit].Update(nValue=Devices[thermostat_unit].nValue, 
