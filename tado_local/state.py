@@ -580,6 +580,20 @@ class DeviceStateManager:
     def clear_optimistic_state(self, device_id: int):
         """Clear optimistic predictions for a device (called when real state arrives)."""
         if device_id in self.optimistic_state:
+            # Check if we need to log a mismatch (optimistic state was overridden)
+            # This would indicate the device rejected or modified our change
+            predicted = self.optimistic_state[device_id]
+            actual = self.current_state.get(device_id, {})
+            
+            mismatches = []
+            for key, predicted_value in predicted.items():
+                actual_value = actual.get(key)
+                if actual_value is not None and actual_value != predicted_value:
+                    mismatches.append(f"{key}: predicted={predicted_value}, actual={actual_value}")
+            
+            if mismatches:
+                logger.info(f"Device {device_id}: Optimistic state was overridden by device - {', '.join(mismatches)}")
+            
             del self.optimistic_state[device_id]
             del self.optimistic_timestamps[device_id]
             logger.debug(f"Cleared optimistic state for device {device_id}")

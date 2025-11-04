@@ -669,6 +669,9 @@ def register_routes(app: FastAPI, get_tado_api):
             - temperature=-1 is useful for automation: turn on without changing schedule
             - temperature=0 is useful for "away mode": turn off but remember setpoint
         """
+        # Log the incoming request
+        logger.info(f"POST /zones/{zone_id}/set temperature={temperature} heating_enabled={heating_enabled}")
+        
         tado_api = get_tado_api()
         if not tado_api:
             raise HTTPException(status_code=503, detail="API not initialized")
@@ -722,15 +725,22 @@ def register_routes(app: FastAPI, get_tado_api):
 
             if temperature > 0:  # Only set if not turning off
                 char_updates['target_temperature'] = temperature
-                logger.info(f"Zone {zone_id} ({zone_name}): Setting target_temperature to {temperature}°C")
 
         if heating_enabled is not None:
             # 0 = OFF, 1 = HEAT
             char_updates['target_heating_cooling_state'] = 1 if heating_enabled else 0
-            logger.info(f"Zone {zone_id} ({zone_name}): Setting heating_enabled to {heating_enabled}")
 
         if not char_updates:
             raise HTTPException(status_code=400, detail="No control parameters provided")
+
+        # Log what we're changing (single summary line)
+        changes = []
+        if 'target_temperature' in char_updates:
+            changes.append(f"temperature={char_updates['target_temperature']}°C")
+        if 'target_heating_cooling_state' in char_updates:
+            mode = "ON" if char_updates['target_heating_cooling_state'] == 1 else "OFF"
+            changes.append(f"heating={mode}")
+        logger.info(f"Zone {zone_id} ({zone_name}): {', '.join(changes)}")
 
         # Apply optimistic state prediction for immediate UI feedback
         optimistic_state = {}
@@ -741,7 +751,7 @@ def register_routes(app: FastAPI, get_tado_api):
         
         if optimistic_state:
             tado_api.state_manager.set_optimistic_state(leader_device_id, optimistic_state)
-            logger.info(f"Zone {zone_id}: Applied optimistic state prediction: {optimistic_state}")
+            logger.debug(f"Zone {zone_id}: Applied optimistic state prediction: {optimistic_state}")
 
         # Set the characteristics on the leader device
         try:

@@ -826,7 +826,6 @@ class TadoLocalAPI:
             raise ValueError("No valid characteristics to set")
 
         # Set the characteristics
-        logger.info(f"Sending to HomeKit: {characteristics_to_set}")
+        logger.debug(f"Sending to HomeKit: {characteristics_to_set}")
         await self.pairing.put_characteristics(characteristics_to_set)
-        logger.info(f"Successfully set characteristics on device {device_id}")
         return True
