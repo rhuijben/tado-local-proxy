@@ -169,8 +169,9 @@ class BasePlugin:
 
         Domoticz.Log(f"Found {len(self.device_creation_attempted)} existing devices")
 
-        # Set heartbeat to 30 seconds (reduced from 10)
-        Domoticz.Heartbeat(30)
+        # Set heartbeat to 5 seconds for responsive initial connection
+        # After first connection, we rely on SSE for real-time updates
+        Domoticz.Heartbeat(5)
 
         # Don't start connection immediately - wait for first heartbeat
         # This ensures Domoticz completes initialization first
@@ -566,6 +567,12 @@ class BasePlugin:
         Domoticz.Debug("onHeartbeat called")
         self.heartbeat_counter += 1
 
+        # After first successful connection, increase heartbeat interval to reduce CPU usage
+        # We use SSE for real-time updates, heartbeat is only for reconnection checks
+        if self.sse_connection and self.heartbeat_counter == 2:
+            Domoticz.Heartbeat(30)  # Switch to 30 seconds after initial connection
+            Domoticz.Debug("Increased heartbeat interval to 30 seconds")
+
         # Check if we need to reconnect
         if self.sse_connection is None and not self.is_connecting:
             # Check if enough time has passed since last attempt
@@ -577,7 +584,7 @@ class BasePlugin:
         # No need to poll - the SSE connection with types=zone,device and refresh_interval=300
         # provides both real-time events and periodic refresh updates for all devices
 
-        # Send keepalive debug message every 10 heartbeats (5 minutes with 30s interval)
+        # Send keepalive debug message every 10 heartbeats
         if self.sse_connection and self.heartbeat_counter % 10 == 0:
             Domoticz.Debug("Connection still active")
 
