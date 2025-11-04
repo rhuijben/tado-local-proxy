@@ -933,10 +933,14 @@ class BasePlugin:
                 # cur_heating: 0=Off, 1=Heating, 2=Idle
                 # Map directly to selector levels 0, 1, 2
                 Domoticz.Debug(f"Updating {zone_name} heating status: {cur_heating}")
-                    # For selector switch: nValue matches cur_heating (1=Heating, 2=Idle, 0=Off)
-                    nValue = cur_heating if cur_heating in (0, 1, 2) else 0
-                    sValue = str(cur_heating)
-                    Devices[heating_unit].Update(nValue=nValue, sValue=sValue, BatteryLevel=battery_level)
+                # For selector switch: nValue and sValue must be 0, 10, 20 (Domoticz convention)
+                if cur_heating in (0, 1, 2):
+                    nValue = cur_heating * 10
+                    sValue = str(nValue)
+                else:
+                    nValue = 0
+                    sValue = "0"
+                Devices[heating_unit].Update(nValue=nValue, sValue=sValue, BatteryLevel=battery_level)
 
         except Exception as e:
             Domoticz.Error(f"Error updating zone device: {e}")
