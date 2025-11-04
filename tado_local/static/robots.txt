@@ -1,0 +1,4 @@
+# Tado Local - Local API Server
+# Not meant to be indexed by search engines
+User-agent: *
+Disallow: /

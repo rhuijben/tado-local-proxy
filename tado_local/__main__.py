@@ -21,6 +21,7 @@ import argparse
 import logging
 import os
 import signal
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -32,8 +33,13 @@ from .api import TadoLocalAPI
 from .cloud import TadoCloudAPI
 from .routes import create_app, register_routes
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging with timestamps
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s.%(msecs)03d %(levelname)-8s [%(name)s] %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    stream=sys.stdout
+)
 logger = logging.getLogger('tado-local')
 
 # Global variables
@@ -128,13 +134,17 @@ async def run_server(args):
         logger.info(f"Thermostats: http://0.0.0.0:{args.port}/thermostats")
         logger.info(f"Live Events: http://0.0.0.0:{args.port}/events")
 
+        # Configure uvicorn logging
+        # Set access log to WARNING level to reduce noise (only errors/warnings shown)
+        logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+        
         # Start the FastAPI server
         config = uvicorn.Config(
             app,
             host="0.0.0.0",
             port=args.port,
             log_level="info",
-            access_log=True
+            access_log=True  # Keep enabled but at WARNING level
         )
         server = uvicorn.Server(config)
         await server.serve()
@@ -179,6 +189,16 @@ async def run_server(args):
             # Full cleanup
             await tado_api.cleanup()
 
+        # Clean up PID file
+        if args.pid_file:
+            pid_path = Path(args.pid_file)
+            try:
+                if pid_path.exists():
+                    pid_path.unlink()
+                    logger.info(f"PID file removed: {pid_path}")
+            except Exception as e:
+                logger.warning(f"Failed to remove PID file: {e}")
+
 def main():
     """Main entry point for the CLI."""
     parser = argparse.ArgumentParser(
@@ -218,8 +238,27 @@ API Endpoints:
                        help="Port for REST API server (default: 4407)")
     parser.add_argument("--clear-pairings", action="store_true",
                        help="Clear all existing pairings from database before starting")
+    parser.add_argument("--verbose", action="store_true",
+                       help="Enable verbose logging (DEBUG level)")
+    parser.add_argument("--pid-file",
+                       help="Write process ID to specified file (useful for daemon mode)")
 
     args = parser.parse_args()
+
+    # Apply verbose logging if requested
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+        logger.info("Verbose logging enabled")
+
+    # Write PID file if requested
+    if args.pid_file:
+        pid_path = Path(args.pid_file)
+        try:
+            pid_path.write_text(str(os.getpid()))
+            logger.info(f"PID file written: {pid_path}")
+        except Exception as e:
+            logger.error(f"Failed to write PID file: {e}")
+            exit(1)
 
     # Run with proper error handling
     try:

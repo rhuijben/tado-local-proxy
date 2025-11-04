@@ -129,6 +129,35 @@ def register_routes(app: FastAPI, get_tado_api):
                 "note": "Web UI not found. Install static/index.html or visit /api for API details"
             }
 
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon():
+        """Serve favicon."""
+        static_dir = Path(__file__).parent / "static"
+        favicon_svg = static_dir / "favicon.svg"
+        
+        if favicon_svg.exists():
+            return FileResponse(favicon_svg, media_type="image/svg+xml")
+        else:
+            raise HTTPException(status_code=404, detail="Favicon not found")
+
+    @app.get("/robots.txt", include_in_schema=False)
+    async def robots():
+        """Serve robots.txt."""
+        static_dir = Path(__file__).parent / "static"
+        robots_file = static_dir / "robots.txt"
+        
+        if robots_file.exists():
+            return FileResponse(robots_file, media_type="text/plain")
+        else:
+            # Fallback if file not found
+            return "User-agent: *\nDisallow: /\n", {"Content-Type": "text/plain"}
+
+    @app.get("/.well-known/{path:path}", include_in_schema=False)
+    async def well_known(path: str):
+        """Stub for .well-known requests to prevent 404 logs."""
+        # Return 404 but gracefully (no need to log these)
+        raise HTTPException(status_code=404, detail="Not found")
+
     @app.get("/api", tags=["Info"])
     async def api_info(api_key: Optional[str] = Depends(get_api_key)):
         """API root with diagnostics and navigation."""
@@ -444,66 +473,50 @@ def register_routes(app: FastAPI, get_tado_api):
             device_count = sum(1 for dev_info in tado_api.state_manager.device_info_cache.values()
                               if dev_info.get('zone_id') == zone_id)
 
-            # Get zone state from leader or first device
+            # Get zone state from leader (with optimistic updates for UI responsiveness)
+            # Note: Individual devices always show real state. Only zone aggregation uses optimistic state.
             zone_state = None
             if leader_device_id:
-                zone_state = tado_api.state_manager.get_current_state(leader_device_id)
+                zone_state = tado_api.state_manager.get_state_with_optimistic(leader_device_id)
 
             # If no leader state, try first device in zone
             if not zone_state:
                 for dev_id, dev_info in tado_api.state_manager.device_info_cache.items():
                     if dev_info.get('zone_id') == zone_id:
-                        zone_state = tado_api.state_manager.get_current_state(dev_id)
+                        zone_state = tado_api.state_manager.get_state_with_optimistic(dev_id)
                         break
 
-            # Build zone summary state
+            # Build zone summary state from zone leader:
+            # - All values (temp, humidity, target_temp, mode) come from zone leader (with optimistic updates)
+            # - Exception: cur_heating for circuit drivers with other devices uses radiator valve state
             if zone_state:
                 current_temp = zone_state.get('current_temperature')
                 humidity = zone_state.get('humidity')
                 target_temp = zone_state.get('target_temperature')
                 target_heating_cooling_state = zone_state.get('target_heating_cooling_state', 0)
 
-                # Mode: Use target_heating_cooling_state
-                # For circuit drivers, check actual devices in zone
-                mode = 0
-                if is_circuit_driver:
-                    # Circuit driver - check if any radiator valves are requesting heat (use cache)
-                    other_devices = [dev_id for dev_id, dev_info in tado_api.state_manager.device_info_cache.items()
-                                    if dev_info.get('zone_id') == zone_id and not dev_info.get('is_circuit_driver')]
+                # Mode: Always from zone leader's target_heating_cooling_state (with optimistic updates)
+                mode = target_heating_cooling_state
 
-                    if other_devices:
-                        # Circuit driver with other devices - check radiator valves
-                        for dev_id in other_devices:
-                            dev_state = tado_api.state_manager.get_current_state(dev_id)
-                            if dev_state and dev_state.get('target_heating_cooling_state') == 1:
-                                mode = 1
-                                break
-                    else:
-                        # Circuit driver alone in zone - use its own state
-                        mode = target_heating_cooling_state
-                else:
-                    # Not a circuit driver - use zone state
-                    mode = target_heating_cooling_state
-
-                # Currently heating logic
+                # Currently heating: From zone leader, EXCEPT for circuit drivers with other devices
                 cur_heating = 0
                 if is_circuit_driver:
-                    # Circuit driver - check if any radiator valves in zone are heating (use cache)
+                    # Circuit driver - check if there are other devices (radiator valves) in zone
                     other_devices = [dev_id for dev_id, dev_info in tado_api.state_manager.device_info_cache.items()
                                     if dev_info.get('zone_id') == zone_id and not dev_info.get('is_circuit_driver')]
 
                     if other_devices:
-                        # Circuit driver with other devices - check radiator valves
+                        # Circuit driver WITH other devices - use radiator valve heating state (real state)
                         for dev_id in other_devices:
                             dev_state = tado_api.state_manager.get_current_state(dev_id)
                             if dev_state and dev_state.get('current_heating_cooling_state') == 1:
                                 cur_heating = 1
                                 break
                     else:
-                        # Circuit driver alone in zone - use its own state
+                        # Circuit driver ALONE in zone - use its own heating state
                         cur_heating = 1 if zone_state.get('current_heating_cooling_state') == 1 else 0
                 else:
-                    # Not a circuit driver - use zone state
+                    # Regular zone leader (not circuit driver) - use its heating state
                     cur_heating = 1 if zone_state.get('current_heating_cooling_state') == 1 else 0
 
                 # Convert temperatures to Fahrenheit
@@ -718,6 +731,17 @@ def register_routes(app: FastAPI, get_tado_api):
 
         if not char_updates:
             raise HTTPException(status_code=400, detail="No control parameters provided")
+
+        # Apply optimistic state prediction for immediate UI feedback
+        optimistic_state = {}
+        if 'target_temperature' in char_updates:
+            optimistic_state['target_temperature'] = char_updates['target_temperature']
+        if 'target_heating_cooling_state' in char_updates:
+            optimistic_state['target_heating_cooling_state'] = char_updates['target_heating_cooling_state']
+        
+        if optimistic_state:
+            tado_api.state_manager.set_optimistic_state(leader_device_id, optimistic_state)
+            logger.info(f"Zone {zone_id}: Applied optimistic state prediction: {optimistic_state}")
 
         # Set the characteristics on the leader device
         try:
@@ -1079,6 +1103,11 @@ def register_routes(app: FastAPI, get_tado_api):
         Notes:
             - Returns history from the zone's leader device
             - Leader device represents the canonical state for the zone
+            - For circuit drivers (e.g., RU02) with radiator valves:
+              * Temperature/humidity history is accurate (from circuit driver sensor)
+              * Heating history shows circuit driver state (may indicate heating for entire circuit, 
+                not just this zone)
+              * This is a known limitation: showing circuit-wide heating is better than showing none
         """
         tado_api = get_tado_api()
         if not tado_api:
@@ -1272,16 +1301,16 @@ def register_routes(app: FastAPI, get_tado_api):
 
                                     leader_device_id = zone_info['leader_device_id']
 
-                                    # Get zone state from leader or first device
+                                    # Get zone state from leader or first device (with optimistic overrides)
                                     zone_state = None
                                     if leader_device_id:
-                                        zone_state = tado_api.state_manager.get_current_state(leader_device_id)
+                                        zone_state = tado_api.state_manager.get_state_with_optimistic(leader_device_id)
 
                                     # If no leader state, try first device in zone
                                     if not zone_state:
                                         for dev_id, dev_info in tado_api.state_manager.device_info_cache.items():
                                             if dev_info.get('zone_id') == zone_id:
-                                                zone_state = tado_api.state_manager.get_current_state(dev_id)
+                                                zone_state = tado_api.state_manager.get_state_with_optimistic(dev_id)
                                                 break
 
                                     if zone_state:
@@ -1308,6 +1337,7 @@ def register_routes(app: FastAPI, get_tado_api):
                             # Send refresh updates for devices (all devices) if device type is allowed
                             if not allowed_types or 'device' in allowed_types:
                                 # Get all devices (let clients filter for leaders/non-leaders)
+                                # Note: Devices use real state only - optimistic updates only apply to zones
                                 for device_id, device_info in tado_api.state_manager.device_info_cache.items():
                                     device_state = tado_api.state_manager.get_current_state(device_id)
                                     

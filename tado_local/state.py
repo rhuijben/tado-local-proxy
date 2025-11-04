@@ -19,6 +19,7 @@
 import datetime
 import logging
 import sqlite3
+import time
 from typing import Dict, List, Any, Optional
 
 logger = logging.getLogger('tado-local')
@@ -63,6 +64,12 @@ class DeviceStateManager:
         self.current_state: Dict[int, Dict[str, Any]] = {}  # device_id -> current state
         self.last_saved_bucket: Dict[int, str] = {}  # device_id -> last saved bucket
         self.bucket_state_snapshot: Dict[int, Dict[str, Any]] = {}  # device_id -> state when bucket was saved
+        
+        # Optimistic update tracking (for UI responsiveness)
+        self.optimistic_state: Dict[int, Dict[str, Any]] = {}  # device_id -> predicted state changes
+        self.optimistic_timestamps: Dict[int, float] = {}  # device_id -> timestamp when prediction was made
+        self.optimistic_timeout = 10.0  # Revert predictions after 10 seconds if no real update
+        
         self._ensure_schema()
         self._load_device_cache()
         self._load_zone_cache()
@@ -554,6 +561,58 @@ class DeviceStateManager:
         if device_id is not None:
             return self.current_state.get(device_id, {})
         return self.current_state
+
+    def set_optimistic_state(self, device_id: int, state_changes: Dict[str, Any]):
+        """
+        Set optimistic state prediction for a device.
+        
+        This allows immediate UI feedback before HomeKit confirms the change.
+        Predictions automatically expire after self.optimistic_timeout seconds.
+        
+        Args:
+            device_id: Device to update
+            state_changes: Dict of state keys to predicted values
+        """
+        self.optimistic_state[device_id] = state_changes.copy()
+        self.optimistic_timestamps[device_id] = time.time()
+        logger.debug(f"Set optimistic state for device {device_id}: {state_changes}")
+
+    def clear_optimistic_state(self, device_id: int):
+        """Clear optimistic predictions for a device (called when real state arrives)."""
+        if device_id in self.optimistic_state:
+            del self.optimistic_state[device_id]
+            del self.optimistic_timestamps[device_id]
+            logger.debug(f"Cleared optimistic state for device {device_id}")
+
+    def get_state_with_optimistic(self, device_id: int) -> Dict:
+        """
+        Get device state with optimistic predictions overlaid.
+        
+        If optimistic predictions exist and haven't expired, they override
+        the real state values. Expired predictions are automatically cleared.
+        
+        Returns:
+            Dict with current state + active optimistic overrides
+        """
+        # Start with real state
+        state = self.current_state.get(device_id, {}).copy()
+        
+        # Check for optimistic overrides
+        if device_id in self.optimistic_state:
+            prediction_time = self.optimistic_timestamps[device_id]
+            age = time.time() - prediction_time
+            
+            if age > self.optimistic_timeout:
+                # Prediction expired - clear it
+                logger.debug(f"Optimistic state for device {device_id} expired after {age:.1f}s")
+                self.clear_optimistic_state(device_id)
+            else:
+                # Apply optimistic overrides
+                optimistic = self.optimistic_state[device_id]
+                state.update(optimistic)
+                logger.debug(f"Applied optimistic state to device {device_id} (age: {age:.1f}s)")
+        
+        return state
 
     def get_all_devices(self) -> List[Dict]:
         """Get all registered devices."""

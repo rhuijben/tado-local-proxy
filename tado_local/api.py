@@ -452,12 +452,13 @@ class TadoLocalAPI:
                     self.change_tracker['polling_changes'] += 1
 
                 # Format log message: show zone name, only add device detail if not zone leader
+                # Use DEBUG level so these only appear with --verbose flag
                 if is_zone_leader:
                     # Zone leader - just show zone name
-                    logger.info(f"[{src}] {zone_name} | {char_name}: {last_value} -> {value}")
+                    logger.debug(f"[{src}] {zone_name} | {char_name}: {last_value} -> {value}")
                 else:
                     # Non-leader device - show zone + device to distinguish multiple devices
-                    logger.info(f"[{src}] {zone_name} ({device_name}) | {char_name}: {last_value} -> {value}")
+                    logger.debug(f"[{src}] {zone_name} ({device_name}) | {char_name}: {last_value} -> {value}")
 
             # Send to event stream for clients (always, even during init)
             # Don't send raw characteristic events anymore - we'll send aggregated state changes
