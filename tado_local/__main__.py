@@ -94,12 +94,11 @@ async def run_server(args):
             # Start authentication in background (non-blocking)
             asyncio.create_task(cloud_api.authenticate())
         else:
-            logger.info("[OK] Tado Cloud API: Already authenticated")
-            logger.info(f"  Home ID: {cloud_api.home_id}")
+            logger.info("Tado Cloud API: Already authenticated (Home ID: {})".format(cloud_api.home_id))
 
             # Verify token is still valid at startup
             if cloud_api.has_valid_access_token():
-                logger.info("[OK] Access token is valid")
+                logger.info("Access token is valid")
             else:
                 logger.info("Access token expired, will refresh on first API call")
 
@@ -167,7 +166,7 @@ async def run_server(args):
             }
         else:
             # Console mode: timestamp + message (clean and readable)
-            log_format = "%(asctime)s.%(msecs)03d %(levelname)-8s %(message)s"
+            log_format = "%(asctime)s %(levelname)-8s %(message)s"
             log_config = {
                 "version": 1,
                 "disable_existing_loggers": False,
@@ -350,7 +349,7 @@ API Endpoints:
             # Fall back to console if syslog fails
             logging.basicConfig(
                 level=logging.INFO,
-                format='%(asctime)s.%(msecs)03d %(levelname)-8s %(message)s',
+                format='%(asctime)s %(levelname)-8s %(message)s',
                 datefmt='%Y-%m-%d %H:%M:%S',
                 stream=sys.stdout,
                 force=True
@@ -369,7 +368,7 @@ API Endpoints:
         # Console mode: timestamp + message (clean and readable)
         logging.basicConfig(
             level=logging.INFO,
-            format='%(asctime)s.%(msecs)03d %(levelname)-8s %(message)s',
+            format='%(asctime)s %(levelname)-8s %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S',
             stream=sys.stdout,
             force=True

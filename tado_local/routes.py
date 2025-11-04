@@ -90,9 +90,9 @@ def create_app():
 
     # Log authentication status
     if API_KEYS:
-        logger.info(f"[OK] API authentication enabled ({len(API_KEYS)} key(s) configured)")
+        logger.info(f"API authentication enabled ({len(API_KEYS)} key(s) configured)")
     else:
-        logger.info("[WARN] API authentication disabled (no TADO_API_KEYS configured)")
+        logger.info("API authentication disabled (no TADO_API_KEYS configured)")
 
     # Mount static files
     static_dir = Path(__file__).parent / "static"
@@ -1441,7 +1441,7 @@ def register_routes(app: FastAPI, get_tado_api):
 
                 if devices:
                     result['devices_synced'] = len(devices)
-                    logger.info(f"[OK] Synced {len(devices)} devices (battery status)")
+                    logger.info(f"Synced {len(devices)} devices (battery status)")
 
                 # Sync to database
                 await sync.sync_all(cloud_api,

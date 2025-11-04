@@ -90,7 +90,7 @@ class TadoCloudSync:
             conn.commit()
             conn.close()
 
-            logger.info(f"[OK] Synced home: {name} (ID: {home_id})")
+            logger.info(f"Synced home: {name} (ID: {home_id})")
             return True
 
         except Exception as e:
@@ -215,7 +215,7 @@ class TadoCloudSync:
             conn.commit()
             conn.close()
 
-            logger.info(f"[OK] Synced {synced_zones} zones and {synced_devices} device assignments from Tado Cloud")
+            logger.info(f"Synced {synced_zones} zones and {synced_devices} device assignments from Tado Cloud")
             return True
 
         except Exception as e:
@@ -282,7 +282,7 @@ class TadoCloudSync:
             conn.commit()
             conn.close()
 
-            logger.info(f"[OK] Updated {updated_count} devices from device list")
+            logger.info(f"Updated {updated_count} devices from device list")
             return True
 
         except Exception as e:
@@ -325,7 +325,6 @@ class TadoCloudSync:
 
         # 1. Sync home info (if provided or needs fetching)
         if home_data is not None:
-            logger.info("Syncing home information...")
             if not self.sync_home(home_data):
                 success = False
             else:
@@ -334,7 +333,6 @@ class TadoCloudSync:
             pass
         else:
             # Fetch if not provided
-            logger.info("Fetching and syncing home information...")
             home_data = await cloud_api.get_home_info()
             if home_data:
                 if not self.sync_home(home_data):
@@ -347,7 +345,6 @@ class TadoCloudSync:
 
         # 2. Sync zones (if provided or needs fetching)
         if zones_data is not None:
-            logger.info("Syncing zones and devices...")
             if not self.sync_zones(zones_data, home_id):
                 success = False
             else:
@@ -356,7 +353,6 @@ class TadoCloudSync:
             pass
         else:
             # Fetch if not provided
-            logger.info("Fetching and syncing zones...")
             zones_data = await cloud_api.get_zones()
             if zones_data:
                 if not self.sync_zones(zones_data, home_id):
@@ -369,7 +365,6 @@ class TadoCloudSync:
 
         # 3. Sync device list (if provided or needs fetching)
         if devices_data is not None:
-            logger.info("Syncing device list (battery states)...")
             if not self.sync_device_list(devices_data, home_id):
                 success = False
             else:
@@ -378,7 +373,6 @@ class TadoCloudSync:
             pass
         else:
             # Fetch if not provided
-            logger.info("Fetching and syncing device list...")
             device_list = await cloud_api.get_device_list()
             if device_list:
                 if not self.sync_device_list(device_list, home_id):
@@ -391,7 +385,7 @@ class TadoCloudSync:
 
         if synced_any:
             if success:
-                logger.info("[OK] Cloud sync completed successfully")
+                logger.info("Cloud sync completed successfully")
             else:
                 logger.warning("Cloud sync completed with errors")
         else:

@@ -48,6 +48,12 @@ Connects to Tado Local and creates/updates thermostat devices for each zone.
         - Thermostat control (target temperature and on/off)<br/>
         - Battery status reporting<br/>
         - Auto-reconnect with configurable retry interval<br/>
+        - Optional DZGA-Flask voicecontrol XML setup<br/>
+        <br/>
+        <h3>Voice Control Integration</h3>
+        Enable "Setup voicecontrol XML" to automatically configure device descriptions for DZGA-Flask integration.<br/>
+        This will merge the thermostat with its temperature sensor and heating mode selector for Google Assistant.<br/>
+        See <a href="https://github.com/DewGew/DZGA-Flask/wiki/3.-Configuration#device-configuraton">DZGA-Flask Device Configuration</a> for details.<br/>
     </description>
     <params>
         <param field="Address" label="API URL" width="300px" required="true" default="http://localhost:4407"/>
@@ -59,6 +65,12 @@ Connects to Tado Local and creates/updates thermostat devices for each zone.
             </options>
         </param>
         <param field="Mode3" label="API Key (optional)" width="300px" default="" password="true"/>
+        <param field="Mode4" label="Setup voicecontrol XML" width="100px">
+            <options>
+                <option label="Yes" value="true"/>
+                <option label="No" value="false" default="true"/>
+            </options>
+        </param>
         <param field="Mode6" label="Debug" width="100px">
             <options>
                 <option label="True" value="Debug"/>
@@ -81,6 +93,7 @@ class BasePlugin:
         self.api_url = ""
         self.retry_interval = 30
         self.auto_enable_devices = True
+        self.setup_voicecontrol = False
         self.api_key = ""
         self.sse_connection = None
         self.zones_fetch_connection = None
@@ -105,12 +118,16 @@ class BasePlugin:
         self.retry_interval = int(Parameters["Mode1"])
         self.auto_enable_devices = (Parameters.get("Mode2", "true") == "true")
         self.api_key = Parameters.get("Mode3", "").strip()
+        self.setup_voicecontrol = (Parameters.get("Mode4", "false") == "true")
 
         # Set debug mode
         if Parameters["Mode6"] == "Debug":
             Domoticz.Debugging(1)
 
         Domoticz.Log(f"Tado Local Plugin started - API: {self.api_url}")
+        Domoticz.Log(f"Retry interval: {self.retry_interval} seconds")
+        Domoticz.Log(f"Auto-enable devices: {'Yes' if self.auto_enable_devices else 'No'}")
+        Domoticz.Log(f"Setup voicecontrol XML: {'Yes' if self.setup_voicecontrol else 'No'}")
         Domoticz.Log(f"Retry interval: {self.retry_interval} seconds")
         Domoticz.Log(f"Auto-enable devices: {'Yes' if self.auto_enable_devices else 'No'}")
         if self.api_key:
@@ -757,13 +774,19 @@ class BasePlugin:
             if temp_unit not in self.device_creation_attempted and temp_unit not in Devices:
                 self.device_creation_attempted.add(temp_unit)
                 try:
-                    Domoticz.Device(
+                    device = Domoticz.Device(
                         Name=f"{zone_name}",
                         Unit=temp_unit,
                         TypeName="Temp+Hum",
                         Used=1 if self.auto_enable_devices else 0
-                    ).Create()
+                    )
+                    device.Create()
                     Domoticz.Log(f"Created temperature sensor: {zone_name} (Unit {temp_unit})")
+                    
+                    # Set voicecontrol XML if enabled (after device creation)
+                    if self.setup_voicecontrol and temp_unit in Devices:
+                        # We need to get the idx values after creation, so we'll update on next cycle
+                        pass
                 except Exception as e:
                     Domoticz.Debug(f"Temp sensor (Unit {temp_unit}) already exists: {e}")
 
@@ -771,30 +794,97 @@ class BasePlugin:
             if thermostat_unit not in self.device_creation_attempted and thermostat_unit not in Devices:
                 self.device_creation_attempted.add(thermostat_unit)
                 try:
-                    Domoticz.Device(
+                    device = Domoticz.Device(
                         Name=f"{zone_name} Thermostat",
                         Unit=thermostat_unit,
                         Type=242,
                         Subtype=1,
                         Used=1 if self.auto_enable_devices else 0
-                    ).Create()
+                    )
+                    device.Create()
                     Domoticz.Log(f"Created thermostat: {zone_name} (Unit {thermostat_unit})")
                 except Exception as e:
                     Domoticz.Debug(f"Thermostat (Unit {thermostat_unit}) already exists: {e}")
 
-            # Create heating status indicator if needed
+            # Create heating mode selector if needed
             if heating_unit not in self.device_creation_attempted and heating_unit not in Devices:
                 self.device_creation_attempted.add(heating_unit)
                 try:
-                    Domoticz.Device(
+                    # Selector Switch with HomeKit-compatible modes
+                    # Level 0 = Off, Level 1 = Heat, Level 2 = Idle
+                    # This matches cur_heating values: 0=Off, 1=Heating, 2=Idle
+                    options = {
+                        'LevelActions': '||',  # 2 separators = 3 levels
+                        'LevelNames': 'Off|Heat|Idle',
+                        'LevelOffHidden': 'true',  # Hide the internal "Off" state
+                        'SelectorStyle': '1'  # 0=buttons, 1=dropdown
+                    }
+                    device = Domoticz.Device(
                         Name=f"{zone_name} Heating",
                         Unit=heating_unit,
-                        TypeName="Switch",
+                        Type=244,
+                        Subtype=62,
+                        Switchtype=18,
+                        Options=options,
                         Used=1 if self.auto_enable_devices else 0
-                    ).Create()
-                    Domoticz.Log(f"Created heating indicator: {zone_name} (Unit {heating_unit})")
+                    )
+                    device.Create()
+                    Domoticz.Log(f"Created heating status selector: {zone_name} (Unit {heating_unit})")
                 except Exception as e:
-                    Domoticz.Debug(f"Heating indicator (Unit {heating_unit}) already exists: {e}")
+                    Domoticz.Debug(f"Heating status selector (Unit {heating_unit}) already exists: {e}")
+
+            # Update voicecontrol descriptions if enabled and all devices exist
+            if self.setup_voicecontrol and temp_unit in Devices and thermostat_unit in Devices and heating_unit in Devices:
+                try:
+                    # Get device idx values
+                    temp_idx = Devices[temp_unit].ID
+                    thermostat_idx = Devices[thermostat_unit].ID
+                    heating_idx = Devices[heating_unit].ID
+                    
+                    # Check if we need to update descriptions (only if not already set)
+                    if '<voicecontrol>' not in Devices[thermostat_unit].Description:
+                        # Get existing description and append voicecontrol XML
+                        existing_desc = Devices[thermostat_unit].Description.strip()
+                        voicecontrol_xml = f"""<voicecontrol>
+  nicknames = {zone_name} Thermostat
+  room = {zone_name}
+  actual_temp_idx = {temp_idx}
+  selector_modes_idx = {heating_idx}
+</voicecontrol>"""
+                        thermostat_desc = f"{existing_desc}\n{voicecontrol_xml}" if existing_desc else voicecontrol_xml
+                        Devices[thermostat_unit].Update(nValue=Devices[thermostat_unit].nValue, 
+                                                        sValue=Devices[thermostat_unit].sValue,
+                                                        Description=thermostat_desc)
+                        Domoticz.Debug(f"Set voicecontrol XML for thermostat unit {thermostat_unit}")
+                    
+                    # Update temp sensor to hide it
+                    if '<voicecontrol>' not in Devices[temp_unit].Description:
+                        existing_desc = Devices[temp_unit].Description.strip()
+                        voicecontrol_xml = f"""<voicecontrol>
+  room = {zone_name}
+  hide = True
+</voicecontrol>"""
+                        temp_desc = f"{existing_desc}\n{voicecontrol_xml}" if existing_desc else voicecontrol_xml
+                        Devices[temp_unit].Update(nValue=Devices[temp_unit].nValue,
+                                                  sValue=Devices[temp_unit].sValue,
+                                                  Description=temp_desc)
+                        Domoticz.Debug(f"Set voicecontrol XML for temp sensor unit {temp_unit}")
+                    
+                    # Update heating selector to hide it
+                    if '<voicecontrol>' not in Devices[heating_unit].Description:
+                        existing_desc = Devices[heating_unit].Description.strip()
+                        voicecontrol_xml = f"""<voicecontrol>
+  room = {zone_name}
+  hide = True
+</voicecontrol>"""
+                        heating_desc = f"{existing_desc}\n{voicecontrol_xml}" if existing_desc else voicecontrol_xml
+                        Devices[heating_unit].Update(nValue=Devices[heating_unit].nValue,
+                                                     sValue=Devices[heating_unit].sValue,
+                                                     Description=heating_desc)
+                        Domoticz.Debug(f"Set voicecontrol XML for heating selector unit {heating_unit}")
+                        
+                except Exception as e:
+                    Domoticz.Debug(f"Error setting voicecontrol XML: {e}")
 
             # Extract state values
             cur_temp = state.get('cur_temp_c')
@@ -830,12 +920,13 @@ class BasePlugin:
                 Domoticz.Debug(f"Updating {zone_name} thermostat: setpoint={setpoint_temp}°C, mode={mode}")
                 Devices[thermostat_unit].Update(nValue=0, sValue=str(setpoint_temp), BatteryLevel=battery_level)
 
-            # Update heating status indicator
+            # Update heating status selector
             if heating_unit in Devices:
                 # cur_heating: 0=Off, 1=Heating, 2=Idle
-                is_heating = (cur_heating == 1)
-                Domoticz.Debug(f"Updating {zone_name} heating: {'ON' if is_heating else 'OFF'}")
-                Devices[heating_unit].Update(nValue=1 if is_heating else 0, sValue="On" if is_heating else "Off", BatteryLevel=battery_level)
+                # Map directly to selector levels 0, 1, 2
+                Domoticz.Debug(f"Updating {zone_name} heating status: {cur_heating}")
+                # For selector switch: nValue=2 means "On", sValue is the level (0, 1, or 2)
+                Devices[heating_unit].Update(nValue=2 if cur_heating > 0 else 0, sValue=str(cur_heating), BatteryLevel=battery_level)
 
         except Exception as e:
             Domoticz.Error(f"Error updating zone device: {e}")

@@ -257,7 +257,7 @@ class TadoCloudAPI:
                 logger.info("Loaded valid Tado Cloud API tokens from database")
                 logger.info(f"Token expires in {int(self.token_expires_at - time.time())} seconds")
             else:
-                logger.warning("Stored Tado Cloud API token is expired, re-authentication required")
+                logger.info("Stored Tado Cloud API token is expired, re-authentication required")
                 self.access_token = None
 
     def _save_tokens(self, token_data: Dict[str, Any]):
@@ -387,7 +387,7 @@ class TadoCloudAPI:
 
                         if resp.status == 200:
                             # Success!
-                            logger.info("[OK] Successfully authenticated with Tado Cloud API!")
+                            logger.info("Successfully authenticated with Tado Cloud API!")
                             self._save_tokens(token_data)
 
                             # Clear auth state
@@ -520,7 +520,7 @@ class TadoCloudAPI:
                     if resp.status == 200:
                         token_data = await resp.json()
                         self._save_tokens(token_data)
-                        logger.info("[OK] Successfully refreshed Tado Cloud API token")
+                        logger.debug("Access token refreshed successfully")
                         return True
                     else:
                         error_data = await resp.text()
@@ -556,9 +556,8 @@ class TadoCloudAPI:
 
         # Try to refresh if we have a refresh token
         if self.refresh_token:
-            logger.info("Refreshing access token...")
+            logger.debug("Refreshing access token...")
             if await self.refresh_access_token():
-                logger.info("[OK] Access token refreshed successfully")
                 return True
             else:
                 logger.warning("Token refresh failed - refresh token may have expired after 30 days")
@@ -631,8 +630,6 @@ class TadoCloudAPI:
                             if sync_dynamic:
                                 zone_states = await self.get_zone_states()
                                 devices = await self.get_device_list()
-                                if devices:
-                                    logger.info(f"[OK] Synced {len(devices)} devices (battery status)")
                                 last_dynamic_sync = current_time
 
                             # Only fetch static data every 24 hours
@@ -641,10 +638,6 @@ class TadoCloudAPI:
                             if sync_static:
                                 home_info = await self.get_home_info()
                                 zones = await self.get_zones()
-                                if home_info:
-                                    logger.info(f"[OK] Synced home info: {home_info.get('name', 'unknown')}")
-                                if zones:
-                                    logger.info(f"[OK] Synced {len(zones)} zones (configuration)")
                                 last_static_sync = current_time
 
                             # Sync to database
