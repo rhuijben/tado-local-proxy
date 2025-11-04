@@ -303,10 +303,14 @@ class TadoLocalAPI:
         logger.info(f"Initialized change tracker with {len(self.change_tracker['last_values'])} known values from database")
 
         # Try to set up persistent event system
-        await self.setup_persistent_events()
+        events_active = await self.setup_persistent_events()
 
-        # Always set up polling as backup/comparison
-        await self.setup_polling_system()
+        # Only set up polling if events failed (no point polling if events work - it just hits cache)
+        if not events_active:
+            logger.warning("Events not available, falling back to polling")
+            await self.setup_polling_system()
+        else:
+            logger.info("Events active, skipping polling (would just hit 3-hour cache)")
 
     async def setup_persistent_events(self):
         """Set up persistent event subscriptions to all event characteristics."""

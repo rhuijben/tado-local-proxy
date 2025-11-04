@@ -150,6 +150,9 @@ async def run_server(args):
                     "default": {
                         "format": log_format,
                     },
+                    "access": {
+                        "format": "%(levelname)-8s %(message)s",
+                    },
                 },
                 "handlers": {
                     "default": {
@@ -157,11 +160,16 @@ async def run_server(args):
                         "class": "logging.StreamHandler",
                         "stream": "ext://sys.stdout",
                     },
+                    "access": {
+                        "formatter": "access",
+                        "class": "logging.StreamHandler",
+                        "stream": "ext://sys.stdout",
+                    },
                 },
                 "loggers": {
                     "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
                     "uvicorn.error": {"handlers": ["default"], "level": "INFO", "propagate": False},
-                    "uvicorn.access": {"handlers": ["default"], "level": "WARNING", "propagate": False},
+                    "uvicorn.access": {"handlers": ["access"], "level": "INFO", "propagate": False},
                 },
             }
         else:
@@ -175,6 +183,10 @@ async def run_server(args):
                         "format": log_format,
                         "datefmt": "%Y-%m-%d %H:%M:%S",
                     },
+                    "access": {
+                        "format": "%(asctime)s %(levelname)-8s %(message)s",
+                        "datefmt": "%Y-%m-%d %H:%M:%S",
+                    },
                 },
                 "handlers": {
                     "default": {
@@ -182,11 +194,16 @@ async def run_server(args):
                         "class": "logging.StreamHandler",
                         "stream": "ext://sys.stdout",
                     },
+                    "access": {
+                        "formatter": "access",
+                        "class": "logging.StreamHandler",
+                        "stream": "ext://sys.stdout",
+                    },
                 },
                 "loggers": {
                     "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
                     "uvicorn.error": {"handlers": ["default"], "level": "INFO", "propagate": False},
-                    "uvicorn.access": {"handlers": ["default"], "level": "WARNING", "propagate": False},
+                    "uvicorn.access": {"handlers": ["access"], "level": "INFO", "propagate": False},
                 },
             }
         
