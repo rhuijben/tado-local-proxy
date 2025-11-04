@@ -19,6 +19,7 @@
 import asyncio
 import argparse
 import logging
+import logging.handlers
 import os
 import signal
 import sys
@@ -33,13 +34,7 @@ from .api import TadoLocalAPI
 from .cloud import TadoCloudAPI
 from .routes import create_app, register_routes
 
-# Configure logging with timestamps
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s.%(msecs)03d %(levelname)-8s [%(name)s] %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S',
-    stream=sys.stdout
-)
+# Logger will be configured in main() based on daemon/console mode
 logger = logging.getLogger('tado-local')
 
 # Global variables
@@ -134,17 +129,68 @@ async def run_server(args):
         logger.info(f"Thermostats: http://0.0.0.0:{args.port}/thermostats")
         logger.info(f"Live Events: http://0.0.0.0:{args.port}/events")
 
-        # Configure uvicorn logging
-        # Set access log to WARNING level to reduce noise (only errors/warnings shown)
-        logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+        # Configure uvicorn logging to match our format
+        if args.syslog:
+            # Syslog mode: uvicorn logs will go through root logger (already configured for syslog)
+            log_config = None  # Use default, which respects root logger config
+        elif args.daemon:
+            # Daemon mode: structured format suitable for syslog
+            log_format = "%(levelname)-8s [%(name)s] %(message)s"
+            log_config = {
+                "version": 1,
+                "disable_existing_loggers": False,
+                "formatters": {
+                    "default": {
+                        "format": log_format,
+                        "datefmt": "%Y-%m-%d %H:%M:%S",
+                    },
+                },
+                "handlers": {
+                    "default": {
+                        "formatter": "default",
+                        "class": "logging.StreamHandler",
+                        "stream": "ext://sys.stdout",
+                    },
+                },
+                "loggers": {
+                    "uvicorn": {"handlers": ["default"], "level": "INFO"},
+                    "uvicorn.error": {"level": "INFO"},
+                    "uvicorn.access": {"handlers": ["default"], "level": "WARNING", "propagate": False},
+                },
+            }
+        else:
+            # Console mode: timestamp + message (clean and readable)
+            log_format = "%(asctime)s.%(msecs)03d %(levelname)-8s %(message)s"
+            log_config = {
+                "version": 1,
+                "disable_existing_loggers": False,
+                "formatters": {
+                    "default": {
+                        "format": log_format,
+                        "datefmt": "%Y-%m-%d %H:%M:%S",
+                    },
+                },
+                "handlers": {
+                    "default": {
+                        "formatter": "default",
+                        "class": "logging.StreamHandler",
+                        "stream": "ext://sys.stdout",
+                    },
+                },
+                "loggers": {
+                    "uvicorn": {"handlers": ["default"], "level": "INFO"},
+                    "uvicorn.error": {"level": "INFO"},
+                    "uvicorn.access": {"handlers": ["default"], "level": "WARNING", "propagate": False},
+                },
+            }
         
         # Start the FastAPI server
         config = uvicorn.Config(
             app,
             host="0.0.0.0",
             port=args.port,
-            log_level="info",
-            access_log=True  # Keep enabled but at WARNING level
+            log_config=log_config,
+            access_log=True
         )
         server = uvicorn.Server(config)
         await server.serve()
@@ -210,12 +256,24 @@ Examples:
   python -m tado_local --bridge-ip 192.168.1.100 --pin 123-45-678
   tado-local --bridge-ip 192.168.1.100 --pin 123-45-678
 
-  # Start API server with existing pairing
+  # Start API server with existing pairing (console mode)
   python -m tado_local --bridge-ip 192.168.1.100
   tado-local --bridge-ip 192.168.1.100
 
+  # Run as system daemon (structured logging for syslog)
+  tado-local --bridge-ip 192.168.1.100 --daemon --pid-file /var/run/tado-local.pid
+
+  # Send logs to local syslog
+  tado-local --bridge-ip 192.168.1.100 --syslog /dev/log
+
+  # Send logs to remote syslog server
+  tado-local --bridge-ip 192.168.1.100 --syslog logserver.local:514
+
   # Custom port and database location
   python -m tado_local --bridge-ip 192.168.1.100 --port 8080 --state ./my-tado.db
+
+  # Debug mode with verbose logging
+  tado-local --bridge-ip 192.168.1.100 --verbose
 
 API Endpoints:
   GET  /               - API information
@@ -240,10 +298,69 @@ API Endpoints:
                        help="Clear all existing pairings from database before starting")
     parser.add_argument("--verbose", action="store_true",
                        help="Enable verbose logging (DEBUG level)")
+    parser.add_argument("--daemon", action="store_true",
+                       help="Run in daemon mode (structured logging for syslog, auto-enables --pid-file)")
+    parser.add_argument("--syslog", 
+                       help="Send logs to syslog instead of stdout (e.g., /dev/log, localhost:514, or remote.server:514)")
     parser.add_argument("--pid-file",
                        help="Write process ID to specified file (useful for daemon mode)")
 
     args = parser.parse_args()
+
+    # Daemon mode implies PID file if not specified
+    if args.daemon and not args.pid_file:
+        args.pid_file = "/var/run/tado-local.pid" if sys.platform != "win32" else "tado-local.pid"
+
+    # Configure logging based on mode
+    if args.syslog:
+        # Syslog mode: send to syslog facility
+        # Parse syslog address
+        syslog_address = args.syslog
+        if ':' in syslog_address and not syslog_address.startswith('/'):
+            # Network address (host:port)
+            host, port = syslog_address.rsplit(':', 1)
+            syslog_address = (host, int(port))
+        # else: Unix socket path (e.g., /dev/log)
+        
+        try:
+            syslog_handler = logging.handlers.SysLogHandler(
+                address=syslog_address,
+                facility=logging.handlers.SysLogHandler.LOG_DAEMON
+            )
+            syslog_handler.setFormatter(logging.Formatter(
+                'tado-local[%(process)d]: %(levelname)s %(message)s'
+            ))
+            
+            root_logger = logging.getLogger()
+            root_logger.setLevel(logging.INFO)
+            root_logger.addHandler(syslog_handler)
+            
+            logger.info("Logging to syslog: %s", args.syslog)
+        except Exception as e:
+            # Fall back to console if syslog fails
+            logging.basicConfig(
+                level=logging.INFO,
+                format='%(asctime)s.%(msecs)03d %(levelname)-8s %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S',
+                stream=sys.stdout
+            )
+            logger.error(f"Failed to connect to syslog ({args.syslog}): {e}")
+            logger.info("Falling back to console logging")
+    elif args.daemon:
+        # Daemon mode: structured format suitable for syslog (no timestamp - syslog adds it)
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(levelname)-8s [%(name)s] %(message)s',
+            stream=sys.stdout
+        )
+    else:
+        # Console mode: timestamp + message (clean and readable)
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s.%(msecs)03d %(levelname)-8s %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S',
+            stream=sys.stdout
+        )
 
     # Apply verbose logging if requested
     if args.verbose:
