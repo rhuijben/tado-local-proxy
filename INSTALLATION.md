@@ -136,6 +136,39 @@ pip uninstall tado-local
 - Publish to PyPI
 - CI/CD pipeline
 
+## System Service Installation
+
+For production deployments, install Tado Local as a system service:
+
+📁 **Service Files**: See `systemd/` directory for:
+- **systemd** service (Ubuntu, Debian, Fedora, Arch, Raspberry Pi OS)
+- **FreeBSD** rc.d script
+- **OpenRC** script (Alpine Linux, Gentoo)
+
+🚀 **Quick Start**: `systemd/QUICKSTART.md` - One-command installation
+📖 **Full Guide**: `systemd/README.md` - Detailed setup and troubleshooting
+
+### Key Features
+- ✅ Non-root user (dedicated `tado-local` user)
+- ✅ Syslog integration for monitoring
+- ✅ Automatic startup on boot
+- ✅ Security hardening (systemd sandboxing)
+- ✅ Proper permission isolation
+
+### Quick Example (Ubuntu/Debian/Raspberry Pi)
+
+```bash
+sudo pip3 install tado-local
+sudo useradd --system --no-create-home --shell /sbin/nologin tado-local
+sudo cp systemd/tado-local.service /etc/systemd/system/
+# Edit the service file to set your bridge IP
+sudo nano /etc/systemd/system/tado-local.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now tado-local
+```
+
+See `systemd/README.md` for complete installation instructions for all platforms.
+
 ## Dependencies
 
 All dependencies are automatically installed:

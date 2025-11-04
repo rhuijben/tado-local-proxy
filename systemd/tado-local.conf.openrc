@@ -1,0 +1,18 @@
+# Tado Local - OpenRC configuration
+# /etc/conf.d/tado-local
+
+# Required: IP address of your Tado HomeKit bridge
+BRIDGE_IP="192.168.1.100"
+
+# Optional: API server port (default: 4407)
+PORT="4407"
+
+# Optional: Database location (default: /var/lib/tado-local/tado-local.db)
+STATE_DB="/var/lib/tado-local/tado-local.db"
+
+# Optional: Syslog socket (default: /dev/log)
+SYSLOG="/dev/log"
+
+# Optional: Additional command-line arguments
+# Example: EXTRA_ARGS="--verbose"
+EXTRA_ARGS=""

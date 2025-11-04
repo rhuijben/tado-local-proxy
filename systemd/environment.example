@@ -1,0 +1,28 @@
+# Tado Local - Environment Configuration
+# Copy to /etc/tado-local/environment and customize
+#
+# Then add to systemd service:
+#   EnvironmentFile=/etc/tado-local/environment
+#
+# Permissions: chmod 600 /etc/tado-local/environment
+
+# Optional: API authentication keys (space-separated for multiple keys)
+# When set, all API endpoints require Bearer token authentication
+# Example: curl -H "Authorization: Bearer your-secret-key" http://localhost:4407/zones
+#TADO_API_KEYS="your-secret-key-here another-key-here"
+
+# Optional: Tado Cloud API credentials (for battery status sync)
+# Get client credentials from https://app.tado.com/
+#TADO_CLIENT_ID="your-client-id"
+#TADO_CLIENT_SECRET="your-client-secret"
+
+# Optional: Custom state database location
+# Default: /var/lib/tado-local/tado-local.db
+#TADO_STATE_DB="/var/lib/tado-local/tado-local.db"
+
+# Optional: Custom port
+# Default: 4407
+#TADO_PORT="4407"
+
+# Optional: Bridge IP (can also be set in service ExecStart)
+#TADO_BRIDGE_IP="192.168.1.100"

@@ -84,7 +84,7 @@ try:
 except ImportError:
     aiohttp = None
 
-logger = logging.getLogger('tado-local')
+logger = logging.getLogger(__name__)
 
 
 class RateLimitInfo:
@@ -387,7 +387,7 @@ class TadoCloudAPI:
 
                         if resp.status == 200:
                             # Success!
-                            logger.info("✓ Successfully authenticated with Tado Cloud API!")
+                            logger.info("[OK] Successfully authenticated with Tado Cloud API!")
                             self._save_tokens(token_data)
 
                             # Clear auth state
@@ -520,7 +520,7 @@ class TadoCloudAPI:
                     if resp.status == 200:
                         token_data = await resp.json()
                         self._save_tokens(token_data)
-                        logger.info("✓ Successfully refreshed Tado Cloud API token")
+                        logger.info("[OK] Successfully refreshed Tado Cloud API token")
                         return True
                     else:
                         error_data = await resp.text()
@@ -558,7 +558,7 @@ class TadoCloudAPI:
         if self.refresh_token:
             logger.info("Refreshing access token...")
             if await self.refresh_access_token():
-                logger.info("✓ Access token refreshed successfully")
+                logger.info("[OK] Access token refreshed successfully")
                 return True
             else:
                 logger.warning("Token refresh failed - refresh token may have expired after 30 days")
@@ -632,7 +632,7 @@ class TadoCloudAPI:
                                 zone_states = await self.get_zone_states()
                                 devices = await self.get_device_list()
                                 if devices:
-                                    logger.info(f"✓ Synced {len(devices)} devices (battery status)")
+                                    logger.info(f"[OK] Synced {len(devices)} devices (battery status)")
                                 last_dynamic_sync = current_time
 
                             # Only fetch static data every 24 hours
@@ -642,9 +642,9 @@ class TadoCloudAPI:
                                 home_info = await self.get_home_info()
                                 zones = await self.get_zones()
                                 if home_info:
-                                    logger.info(f"✓ Synced home info: {home_info.get('name', 'unknown')}")
+                                    logger.info(f"[OK] Synced home info: {home_info.get('name', 'unknown')}")
                                 if zones:
-                                    logger.info(f"✓ Synced {len(zones)} zones (configuration)")
+                                    logger.info(f"[OK] Synced {len(zones)} zones (configuration)")
                                 last_static_sync = current_time
 
                             # Sync to database

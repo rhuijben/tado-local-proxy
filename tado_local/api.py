@@ -30,7 +30,7 @@ from .state import DeviceStateManager
 from .homekit_uuids import get_characteristic_name
 
 # Configure logging
-logger = logging.getLogger('tado-local')
+logger = logging.getLogger(__name__)
 
 
 class TadoLocalAPI:

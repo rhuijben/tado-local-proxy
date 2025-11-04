@@ -22,7 +22,7 @@ from aiohomekit.characteristic_cache import CharacteristicCacheMemory
 from aiohomekit import hkjson
 from .database import HOMEKIT_SCHEMA
 
-logger = logging.getLogger('tado-local')
+logger = logging.getLogger(__name__)
 
 
 class CharacteristicCacheSQLite(CharacteristicCacheMemory):

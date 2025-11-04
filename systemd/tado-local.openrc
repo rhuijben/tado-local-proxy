@@ -1,0 +1,55 @@
+#!/sbin/openrc-run
+# Tado Local - OpenRC service script
+# Installation:
+#   sudo cp systemd/tado-local.openrc /etc/init.d/tado-local
+#   sudo chmod +x /etc/init.d/tado-local
+#   sudo adduser -D -H -s /sbin/nologin tado-local
+#   sudo mkdir -p /var/lib/tado-local /run/tado-local
+#   sudo chown tado-local:tado-local /var/lib/tado-local /run/tado-local
+#   sudo rc-update add tado-local default
+#   sudo rc-service tado-local start
+#
+# Configuration in /etc/conf.d/tado-local:
+#   BRIDGE_IP="192.168.1.100"
+#   PORT="4407"
+#   STATE_DB="/var/lib/tado-local/tado-local.db"
+#   EXTRA_ARGS=""
+
+name="Tado Local"
+description="REST API for Tado HomeKit Bridge"
+
+command="/usr/local/bin/tado-local"
+command_user="tado-local:tado-local"
+command_background="yes"
+
+pidfile="/run/tado-local/tado-local.pid"
+state_db="${STATE_DB:-/var/lib/tado-local/tado-local.db}"
+bridge_ip="${BRIDGE_IP}"
+port="${PORT:-4407}"
+syslog="${SYSLOG:-/dev/log}"
+
+depend() {
+    need net
+    after firewall
+}
+
+start_pre() {
+    # Check if bridge IP is configured
+    if [ -z "$bridge_ip" ]; then
+        eerror "BRIDGE_IP not set in /etc/conf.d/tado-local"
+        return 1
+    fi
+    
+    # Create runtime directory
+    checkpath --directory --owner tado-local:tado-local --mode 0755 /run/tado-local
+    
+    # Create state directory
+    checkpath --directory --owner tado-local:tado-local --mode 0750 /var/lib/tado-local
+}
+
+command_args="--bridge-ip ${bridge_ip} \
+              --state ${state_db} \
+              --port ${port} \
+              --syslog ${syslog} \
+              --pid-file ${pidfile} \
+              ${EXTRA_ARGS}"

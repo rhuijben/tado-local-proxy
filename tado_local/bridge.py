@@ -40,7 +40,7 @@ from zeroconf.asyncio import AsyncZeroconf
 from .cache import CharacteristicCacheSQLite
 from .database import DB_SCHEMA
 
-logger = logging.getLogger('tado-local')
+logger = logging.getLogger(__name__)
 
 
 class TadoBridge:

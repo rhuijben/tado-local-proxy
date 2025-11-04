@@ -1,0 +1,67 @@
+#!/bin/sh
+#
+# PROVIDE: tado_local
+# REQUIRE: NETWORKING DAEMON
+# KEYWORD: shutdown
+#
+# Add these lines to /etc/rc.conf to enable tado-local:
+#
+# tado_local_enable="YES"
+# tado_local_bridge_ip="192.168.1.100"  # Required: your Tado bridge IP
+# tado_local_port="4407"                # Optional: API port (default: 4407)
+# tado_local_flags=""                   # Optional: additional flags
+#
+# Installation:
+#   sudo cp systemd/tado-local.freebsd /usr/local/etc/rc.d/tado_local
+#   sudo chmod +x /usr/local/etc/rc.d/tado_local
+#   sudo pw useradd tado-local -d /var/db/tado-local -s /usr/sbin/nologin -c "Tado Local Service"
+#   sudo mkdir -p /var/db/tado-local /var/run/tado-local
+#   sudo chown tado-local:tado-local /var/db/tado-local /var/run/tado-local
+#   echo 'tado_local_enable="YES"' | sudo tee -a /etc/rc.conf
+#   echo 'tado_local_bridge_ip="192.168.1.100"' | sudo tee -a /etc/rc.conf
+#   sudo service tado_local start
+
+. /etc/rc.subr
+
+name="tado_local"
+rcvar=tado_local_enable
+
+load_rc_config $name
+
+: ${tado_local_enable:="NO"}
+: ${tado_local_user:="tado-local"}
+: ${tado_local_group:="tado-local"}
+: ${tado_local_bridge_ip:=""}
+: ${tado_local_port:="4407"}
+: ${tado_local_state_db:="/var/db/tado-local/tado-local.db"}
+: ${tado_local_pid_file:="/var/run/tado-local/tado-local.pid"}
+: ${tado_local_syslog:="/var/run/log"}
+: ${tado_local_flags:=""}
+
+# Require bridge IP to be configured
+if [ -z "$tado_local_bridge_ip" ]; then
+    echo "ERROR: tado_local_bridge_ip must be set in /etc/rc.conf"
+    exit 1
+fi
+
+pidfile="$tado_local_pid_file"
+command="/usr/local/bin/tado-local"
+command_args="--bridge-ip ${tado_local_bridge_ip} \
+              --state ${tado_local_state_db} \
+              --port ${tado_local_port} \
+              --syslog ${tado_local_syslog} \
+              --pid-file ${tado_local_pid_file} \
+              ${tado_local_flags}"
+
+start_precmd="tado_local_prestart"
+
+tado_local_prestart()
+{
+    # Create runtime directory for PID file
+    install -d -o ${tado_local_user} -g ${tado_local_group} -m 755 /var/run/tado-local
+    
+    # Create state directory for database
+    install -d -o ${tado_local_user} -g ${tado_local_group} -m 750 /var/db/tado-local
+}
+
+run_rc_command "$1"

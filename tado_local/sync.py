@@ -20,7 +20,7 @@ import logging
 import sqlite3
 from typing import Dict, List, Any
 
-logger = logging.getLogger('tado-local')
+logger = logging.getLogger(__name__)
 
 
 def normalize_device_type(tado_device_type: str) -> str:
@@ -90,7 +90,7 @@ class TadoCloudSync:
             conn.commit()
             conn.close()
 
-            logger.info(f"✓ Synced home: {name} (ID: {home_id})")
+            logger.info(f"[OK] Synced home: {name} (ID: {home_id})")
             return True
 
         except Exception as e:
@@ -215,7 +215,7 @@ class TadoCloudSync:
             conn.commit()
             conn.close()
 
-            logger.info(f"✓ Synced {synced_zones} zones and {synced_devices} device assignments from Tado Cloud")
+            logger.info(f"[OK] Synced {synced_zones} zones and {synced_devices} device assignments from Tado Cloud")
             return True
 
         except Exception as e:
@@ -282,7 +282,7 @@ class TadoCloudSync:
             conn.commit()
             conn.close()
 
-            logger.info(f"✓ Updated {updated_count} devices from device list")
+            logger.info(f"[OK] Updated {updated_count} devices from device list")
             return True
 
         except Exception as e:
@@ -391,7 +391,7 @@ class TadoCloudSync:
 
         if synced_any:
             if success:
-                logger.info("✓ Cloud sync completed successfully")
+                logger.info("[OK] Cloud sync completed successfully")
             else:
                 logger.warning("Cloud sync completed with errors")
         else:

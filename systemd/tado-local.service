@@ -1,0 +1,68 @@
+# Tado Local - systemd service unit
+# Installation:
+#   sudo cp systemd/tado-local.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable tado-local
+#   sudo systemctl start tado-local
+
+[Unit]
+Description=Tado Local - REST API for Tado HomeKit Bridge
+Documentation=https://github.com/AmpScm/TadoLocal
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tado-local
+Group=tado-local
+
+# Working directory
+WorkingDirectory=/var/lib/tado-local
+
+# Environment
+Environment="TADO_STATE_DB=/var/lib/tado-local/tado-local.db"
+
+# Command (adjust --bridge-ip for your setup)
+ExecStart=/usr/local/bin/tado-local \
+    --bridge-ip 192.168.1.100 \
+    --state /var/lib/tado-local/tado-local.db \
+    --port 4407 \
+    --syslog /dev/log \
+    --pid-file /run/tado-local/tado-local.pid
+
+# Security hardening
+# Create runtime directory for PID file
+RuntimeDirectory=tado-local
+RuntimeDirectoryMode=0755
+
+# State directory for database
+StateDirectory=tado-local
+StateDirectoryMode=0750
+
+# No root needed - only network access required
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/tado-local
+
+# Network only - no special privileges needed
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Process restrictions
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+# Restart policy
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target

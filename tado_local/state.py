@@ -22,7 +22,7 @@ import sqlite3
 import time
 from typing import Dict, List, Any, Optional
 
-logger = logging.getLogger('tado-local')
+logger = logging.getLogger(__name__)
 
 class DeviceStateManager:
     """Manages device state tracking, history, and change detection."""

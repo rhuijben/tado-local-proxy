@@ -35,7 +35,7 @@ from .cloud import TadoCloudAPI
 from .routes import create_app, register_routes
 
 # Logger will be configured in main() based on daemon/console mode
-logger = logging.getLogger('tado-local')
+logger = logging.getLogger(__name__)
 
 # Global variables
 bridge_pairing: Optional[IpPairing] = None
@@ -94,12 +94,12 @@ async def run_server(args):
             # Start authentication in background (non-blocking)
             asyncio.create_task(cloud_api.authenticate())
         else:
-            logger.info("✓ Tado Cloud API: Already authenticated")
+            logger.info("[OK] Tado Cloud API: Already authenticated")
             logger.info(f"  Home ID: {cloud_api.home_id}")
 
             # Verify token is still valid at startup
             if cloud_api.has_valid_access_token():
-                logger.info("✓ Access token is valid")
+                logger.info("[OK] Access token is valid")
             else:
                 logger.info("Access token expired, will refresh on first API call")
 
@@ -129,20 +129,27 @@ async def run_server(args):
         logger.info(f"Thermostats: http://0.0.0.0:{args.port}/thermostats")
         logger.info(f"Live Events: http://0.0.0.0:{args.port}/events")
 
-        # Configure uvicorn logging to match our format
+        # Configure uvicorn logging to match our format and prevent duplicates
         if args.syslog:
-            # Syslog mode: uvicorn logs will go through root logger (already configured for syslog)
-            log_config = None  # Use default, which respects root logger config
+            # Syslog mode: disable uvicorn's default logging, use root logger
+            log_config = {
+                "version": 1,
+                "disable_existing_loggers": False,
+                "loggers": {
+                    "uvicorn": {"handlers": [], "level": "INFO", "propagate": True},
+                    "uvicorn.error": {"handlers": [], "level": "INFO", "propagate": True},
+                    "uvicorn.access": {"handlers": [], "level": "WARNING", "propagate": True},
+                },
+            }
         elif args.daemon:
-            # Daemon mode: structured format suitable for syslog
-            log_format = "%(levelname)-8s [%(name)s] %(message)s"
+            # Daemon mode: simple format without timestamps
+            log_format = "%(levelname)-8s %(message)s"
             log_config = {
                 "version": 1,
                 "disable_existing_loggers": False,
                 "formatters": {
                     "default": {
                         "format": log_format,
-                        "datefmt": "%Y-%m-%d %H:%M:%S",
                     },
                 },
                 "handlers": {
@@ -153,8 +160,8 @@ async def run_server(args):
                     },
                 },
                 "loggers": {
-                    "uvicorn": {"handlers": ["default"], "level": "INFO"},
-                    "uvicorn.error": {"level": "INFO"},
+                    "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
+                    "uvicorn.error": {"handlers": ["default"], "level": "INFO", "propagate": False},
                     "uvicorn.access": {"handlers": ["default"], "level": "WARNING", "propagate": False},
                 },
             }
@@ -178,8 +185,8 @@ async def run_server(args):
                     },
                 },
                 "loggers": {
-                    "uvicorn": {"handlers": ["default"], "level": "INFO"},
-                    "uvicorn.error": {"level": "INFO"},
+                    "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
+                    "uvicorn.error": {"handlers": ["default"], "level": "INFO", "propagate": False},
                     "uvicorn.access": {"handlers": ["default"], "level": "WARNING", "propagate": False},
                 },
             }
@@ -335,6 +342,9 @@ API Endpoints:
             root_logger.setLevel(logging.INFO)
             root_logger.addHandler(syslog_handler)
             
+            # Silence console output in syslog mode
+            logging.getLogger().handlers = [syslog_handler]
+            
             logger.info("Logging to syslog: %s", args.syslog)
         except Exception as e:
             # Fall back to console if syslog fails
@@ -342,7 +352,8 @@ API Endpoints:
                 level=logging.INFO,
                 format='%(asctime)s.%(msecs)03d %(levelname)-8s %(message)s',
                 datefmt='%Y-%m-%d %H:%M:%S',
-                stream=sys.stdout
+                stream=sys.stdout,
+                force=True
             )
             logger.error(f"Failed to connect to syslog ({args.syslog}): {e}")
             logger.info("Falling back to console logging")
@@ -350,8 +361,9 @@ API Endpoints:
         # Daemon mode: structured format suitable for syslog (no timestamp - syslog adds it)
         logging.basicConfig(
             level=logging.INFO,
-            format='%(levelname)-8s [%(name)s] %(message)s',
-            stream=sys.stdout
+            format='%(levelname)-8s %(message)s',
+            stream=sys.stdout,
+            force=True
         )
     else:
         # Console mode: timestamp + message (clean and readable)
@@ -359,7 +371,8 @@ API Endpoints:
             level=logging.INFO,
             format='%(asctime)s.%(msecs)03d %(levelname)-8s %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S',
-            stream=sys.stdout
+            stream=sys.stdout,
+            force=True
         )
 
     # Apply verbose logging if requested
