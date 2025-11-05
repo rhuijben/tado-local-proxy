@@ -818,11 +818,11 @@ class BasePlugin:
                 self.device_creation_attempted.add(heating_unit)
                 try:
                     # Selector Switch with HomeKit-compatible modes
-                    # Level 0 = Off, Level 1 = Heat, Level 2 = Idle
-                    # This matches cur_heating values: 0=Off, 1=Heating, 2=Idle
+                    # Level 0 = Off, Level 1 = Heat, Level 2 = Cool
+                    # This matches cur_heating values: 0=Off, 1=Heating, 2=Cooling
                     options = {
                         'LevelActions': '||',  # 2 separators = 3 levels
-                        'LevelNames': 'Off|Heat|Idle',
+                        'LevelNames': 'Off|Heat|Cool',
                         'LevelOffHidden': 'true',  # Hide the internal "Off" state
                         'SelectorStyle': '1'  # 0=buttons, 1=dropdown
                     }
@@ -930,7 +930,7 @@ class BasePlugin:
 
             # Update heating status selector
             if heating_unit in Devices:
-                # cur_heating: 0=Off, 1=Heating, 2=Idle
+                # cur_heating: 0=Off, 1=Heating, 2=Cooling
                 # Map directly to selector levels 0, 1, 2
                 Domoticz.Debug(f"Updating {zone_name} heating status: {cur_heating}")
                 # For selector switch: nValue and sValue must be 0, 10, 20 (Domoticz convention)

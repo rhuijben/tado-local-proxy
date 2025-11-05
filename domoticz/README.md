@@ -16,28 +16,40 @@ This Domoticz plugin connects to Tado Local to monitor and control your Tado hea
 
 ## Device Numbering Scheme
 
-The plugin uses **Domoticz Extended Framework** with a hierarchical ID-based scheme:
+The plugin uses a fixed 5-unit block per zone. Each zone uses 5 consecutive Domoticz Unit numbers:
 
-### Device Hierarchy
-Each zone uses `Unit = zone_id` with sub-units for different device types:
+- **Unit 1**: Temperature + Humidity sensor
+- **Unit 2**: Thermostat (setpoint control)
+- **Unit 3**: Heating status selector (Off/Heat/Cool)
+- **Unit 4**: First additional thermostat (non-leader, if present)
+- **Unit 5**: Reserved for future use
 
-- **Sub-unit 1**: Sensor (temp+humidity)
-- **Sub-unit 2**: Thermostat (setpoint)
-- **Sub-unit 3**: Heating indicator
-- **Sub-units 10+**: Additional non-leader thermostats
+### Example
 
-### Examples
-- **Zone 1**: Unit 1 → Sub-unit 1 (sensor), Sub-unit 2 (thermostat), Sub-unit 3 (heating)
-- **Zone 2**: Unit 2 → Sub-unit 1 (sensor), Sub-unit 2 (thermostat), Sub-unit 3 (heating)
-- **Zone 3**: Unit 3 → Sub-unit 1 (sensor), Sub-unit 2 (thermostat), Sub-unit 3 (heating)
+- **Zone 1**: Units 1-5
+- **Zone 2**: Units 6-10
+- **Zone 3**: Units 11-15
+- ...and so on (up to 51 zones, 255 units max).
 
-### Extended Framework Benefits
-The Extended Framework removes the legacy 255 device limit, supporting unlimited zones.
+### Heating Status Selector (Unit 3)
 
-All devices within a zone are logically grouped under the same Unit ID, making management intuitive.
+The third device for each zone is a selector switch with three states:
+- **Off**: Heating is off
+- **Heat**: Zone is actively heating
+- **Cool**: Zone is actively cooling (as reported by HomeKit accessories)
+
+This matches the Tado `cur_heating` values:
+- 0 = Off
+- 1 = Heat
+- 2 = Cool
+
+### Additional Thermostats
+
+If a zone has more than one thermostat, the first non-leader thermostat is mapped to Unit 4 as a temperature + humidity sensor. Further thermostats are ignored.
 
 ### Battery Status
-All sub-units for each zone (sensor, thermostat, heating) report the battery status from the zone's leader thermostat.
+
+All devices report battery status from the zone's leader thermostat.
 
 ## Installation
 
