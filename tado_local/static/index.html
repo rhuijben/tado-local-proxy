@@ -515,13 +515,15 @@
     </div>
 
     <script>
-        let zones = [];
-        let currentZone = null;
-        let tempValue = 20;
-        let modeValue = 'heat';
-        let eventSource = null;
-        let chartJsLoaded = false;
-        let historyChart = null;
+    let zones = [];
+    let currentZone = null;
+    let tempValue = 20;
+    let modeValue = 'heat';
+    let eventSource = null;
+    let chartJsLoaded = false;
+    let historyChart = null;
+    let lastCloudAuthState = null;
+    let statusPollInterval = null;
 
         // Lazy load Chart.js and date adapter when history tab is first opened
         async function loadChartJs() {
@@ -855,6 +857,19 @@
                     cloudStatusEl.textContent = 'Unavailable';
                     cloudStatusEl.style.color = '#999';
                 }
+
+                // Detect cloud authentication change
+                const cloudAuth = data.cloud_api && data.cloud_api.authenticated;
+                if (lastCloudAuthState === false && cloudAuth === true) {
+                    showSuccess('Cloud authentication successful!');
+                    loadZones(); // Reload zones after cloud sync
+                    // Stop polling status
+                    if (statusPollInterval) {
+                        clearInterval(statusPollInterval);
+                        statusPollInterval = null;
+                    }
+                }
+                lastCloudAuthState = cloudAuth;
             } catch (error) {
                 console.error('Failed to load status:', error);
             }
@@ -1099,8 +1114,25 @@
             const errorDiv = document.getElementById('error-message');
             errorDiv.textContent = message;
             errorDiv.style.display = 'block';
+            errorDiv.style.background = '#ffebee';
+            errorDiv.style.color = '#c62828';
             setTimeout(() => {
                 errorDiv.style.display = 'none';
+                errorDiv.style.background = '';
+                errorDiv.style.color = '';
+            }, 5000);
+        }
+
+        function showSuccess(message) {
+            const errorDiv = document.getElementById('error-message');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            errorDiv.style.background = '#e8f5e9';
+            errorDiv.style.color = '#388e3c';
+            setTimeout(() => {
+                errorDiv.style.display = 'none';
+                errorDiv.style.background = '';
+                errorDiv.style.color = '';
             }, 5000);
         }
 
@@ -1226,7 +1258,15 @@
         loadZones();
         loadStatus();
         setupEventStream();
-        
+
+        // Poll status until cloud authentication is successful
+        lastCloudAuthState = false;
+        statusPollInterval = setInterval(() => {
+            if (!lastCloudAuthState) {
+                loadStatus();
+            }
+        }, 5000); // Poll every 5 seconds until authenticated
+
         // Fallback: Still refresh periodically in case SSE fails
         setInterval(loadZones, 60000); // Every minute as fallback
     </script>

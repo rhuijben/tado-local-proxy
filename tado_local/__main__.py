@@ -174,7 +174,7 @@ async def run_server(args):
             }
         else:
             # Console mode: timestamp + message (clean and readable)
-            log_format = "%(asctime)s %(levelname)-8s %(message)s"
+            log_format = "%(asctime)s %(levelname)s %(message)s"
             log_config = {
                 "version": 1,
                 "disable_existing_loggers": False,
@@ -184,7 +184,7 @@ async def run_server(args):
                         "datefmt": "%Y-%m-%d %H:%M:%S",
                     },
                     "access": {
-                        "format": "%(asctime)s %(levelname)-8s %(message)s",
+                        "format": "%(asctime)s %(levelname)s %(message)s",
                         "datefmt": "%Y-%m-%d %H:%M:%S",
                     },
                 },
@@ -303,8 +303,9 @@ API Endpoints:
   GET  /status         - System status
   GET  /accessories    - All HomeKit accessories
   GET  /zones          - All Tado zones
+  POST /zones/{id}/set - Set zone temperature
   GET  /thermostats    - All thermostats with temperatures
-  POST /thermostats/{id}/set_temperature - Set thermostat temperature
+  POST /thermostats/{id}/set - Set thermostat temperature
   GET  /events         - Server-Sent Events for real-time updates
   POST /refresh        - Manually refresh data
         """
@@ -366,7 +367,7 @@ API Endpoints:
             # Fall back to console if syslog fails
             logging.basicConfig(
                 level=logging.INFO,
-                format='%(asctime)s %(levelname)-8s %(message)s',
+                format='%(asctime)s %(levelname)s %(message)s',
                 datefmt='%Y-%m-%d %H:%M:%S',
                 stream=sys.stdout,
                 force=True
@@ -377,7 +378,7 @@ API Endpoints:
         # Daemon mode: structured format suitable for syslog (no timestamp - syslog adds it)
         logging.basicConfig(
             level=logging.INFO,
-            format='%(levelname)-8s %(message)s',
+            format='%(levelname)s %(message)s',
             stream=sys.stdout,
             force=True
         )
@@ -385,7 +386,7 @@ API Endpoints:
         # Console mode: timestamp + message (clean and readable)
         logging.basicConfig(
             level=logging.INFO,
-            format='%(asctime)s %(levelname)-8s %(message)s',
+            format='%(asctime)s %(levelname)s %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S',
             stream=sys.stdout,
             force=True

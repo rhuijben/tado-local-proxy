@@ -308,6 +308,11 @@ class TadoCloudAPI:
         Returns:
             True if authentication succeeded, False otherwise
         """
+        # Prevent duplicate device code requests if one is still valid
+        if self.auth_verification_uri and self.auth_expires_at and time.time() < self.auth_expires_at:
+            logger.info("Device code still valid, not starting new authentication request.")
+            return False
+
         if aiohttp is None:
             logger.error("aiohttp not installed - cannot use Tado Cloud API")
             logger.error("Install with: pip install aiohttp")
@@ -348,24 +353,19 @@ class TadoCloudAPI:
                 self.auth_expires_at = time.time() + expires_in
 
                 # Step 2: Display user instructions
-                logger.info("")
                 logger.info("=" * 70)
                 logger.info("TADO CLOUD API AUTHENTICATION REQUIRED")
                 logger.info("=" * 70)
-                logger.info("")
                 logger.info("To connect to Tado Cloud API, please visit this URL:")
-                logger.info("")
                 logger.info(f"    {verification_uri}")
-                logger.info("")
                 logger.info(f"Your code: {user_code}")
-                logger.info("")
-                logger.info("After authorizing, return here. Polling for authorization...")
                 logger.info(f"(This code expires in {expires_in} seconds)")
                 logger.info("")
-                logger.info("Or check the /status endpoint for the URL:")
+                logger.info("Once authenticated, you see a success result here in the log. Polling for authorization...")
+                logger.info("")
+                logger.info("You can also access this information via the web-ui or the /status endpoint:")
                 logger.info(f"    curl http://localhost:4407/status")
                 logger.info("=" * 70)
-                logger.info("")
 
                 # Step 3: Poll for token
                 poll_start = time.time()
@@ -900,13 +900,13 @@ class TadoCloudAPI:
 
                     # 304 Not Modified - use cached data
                     if resp.status == 304:
-                        logger.info(f"API returned 304 Not Modified for '{endpoint}' - using cached data")
+                        logger.info(f"API returned 304 Not Modified for {url} - served from cache")
                         if cached:
                             # Update expiry time
                             self._set_cache(endpoint, cached['data'], cached['etag'], cache_lifetime_hours)
                             return cached['data']
                         else:
-                            logger.warning(f"Got 304 but no cache available for '{endpoint}'")
+                            logger.warning(f"Got 304 but no cache available for {url}")
                             return None
 
                     # Success
@@ -917,24 +917,24 @@ class TadoCloudAPI:
                         # Cache the response
                         self._set_cache(endpoint, data, etag, cache_lifetime_hours)
 
-                        logger.info(f"Fetched '{endpoint}' from API (ETag: {etag})")
+                        logger.info(f"Fetched {url} from API (fresh, not cached)")
                         return data
 
                     # Rate limit exceeded
                     elif resp.status == 429:
                         error_text = await resp.text()
-                        logger.error(f"Rate limit exceeded for '{endpoint}': {error_text}")
+                        logger.error(f"Rate limit exceeded for {url}: {error_text}")
                         logger.warning(f"Tado API rate limit: {self.rate_limit.remaining_calls}/{self.rate_limit.granted_calls} calls remaining")
                         return None
 
                     # Error
                     else:
                         error_text = await resp.text()
-                        logger.error(f"Failed to fetch '{endpoint}': HTTP {resp.status} - {error_text}")
+                        logger.error(f"Failed to fetch {url}: HTTP {resp.status} - {error_text}")
                         return None
 
         except Exception as e:
-            logger.error(f"Error fetching '{endpoint}': {e}")
+            logger.error(f"Error fetching {url}: {e}")
             return None
 
     # ========================================================================

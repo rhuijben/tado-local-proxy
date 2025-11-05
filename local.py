@@ -1,6 +1,4 @@
-#!/usr/bin/env python3
 
-#
 # Copyright 2025 The TadoLocal and AmpScm contributors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,27 +24,6 @@ or
     tado-local
 """
 
-import logging
-from typing import Optional
-
-# Import from tado_local package
-from tado_local.api import TadoLocalAPI
-from tado_local.routes import create_app, register_routes
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger('tado-local')
-
-# Create FastAPI app and register all routes from the package
-app = create_app()
-
-# Global API instance - will be initialized in main()
-tado_api: Optional[TadoLocalAPI] = None
-
-# Register all routes with a getter function for tado_api
-register_routes(app, lambda: tado_api)
-
 if __name__ == "__main__":
-    # Call the package main function
     from tado_local.__main__ import main
     main()
