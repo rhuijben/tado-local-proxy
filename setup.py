@@ -61,6 +61,10 @@ setup(
     ],
     python_requires=">=3.11",
     install_requires=requirements,
+    extras_require={
+        # Optional Avahi/dbus support for platforms that provide dbus-next
+        'avahi': ['dbus-next>=0.6.0'],
+    },
     entry_points={
         "console_scripts": [
             "tado-local=tado_local.__main__:main",

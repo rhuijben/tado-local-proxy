@@ -127,6 +127,56 @@ async def run_server(args):
         # Initialize the API with the pairing
         await tado_api.initialize(bridge_pairing)
 
+        # Register mDNS service asynchronously (Avahi via DBus preferred, fall back to zeroconf)
+        if not args.no_mdns:
+            try:
+                logger.debug("Attempting to import zeroconf_register for mDNS registration")
+                from .zeroconf_register import register_service_async
+                logger.info("mDNS registration helper loaded")
+
+                async def _schedule_mdns():
+                    # Register a single HTTP service so basic clients can discover the API.
+                    # We intentionally publish only the HTTP service to avoid duplicate
+                    # registrations (the previous code registered two distinct service
+                    # types which caused two external publisher processes).
+                    try:
+                        from .__version__ import __version__ as tado_version
+                        # Do not advertise the bridge IP here; advertise the daemon host
+                        # so clients connect to this service instance to manage Tado.
+                        ok, method, msg = await register_service_async(name='tado-local', port=args.port, props={
+                            'path': '/',
+                            'version': tado_version,
+                            'app': 'tado-local',
+                            'id': 'tado-local'
+                        }, service_type='_http._tcp.local.')
+                        if ok:
+                            logger.info(f"HTTP mDNS service registered via {method} (advertising daemon host A/AAAA records)")
+                        else:
+                            logger.warning(f"HTTP mDNS registration: {msg} (advertising daemon host)")
+                    except Exception as e:
+                        logger.exception("HTTP mDNS async registration failed")
+
+                # schedule background registration; do not await so startup remains fast
+                task = asyncio.create_task(_schedule_mdns())
+                logger.info("Scheduled HTTP mDNS registration task")
+
+                def _mdns_done(fut: 'asyncio.Future'):
+                    try:
+                        fut.result()
+                    except Exception:
+                        logger.exception("HTTP mDNS registration task failed")
+
+                try:
+                    task.add_done_callback(_mdns_done)
+                except Exception:
+                    # If add_done_callback isn't available for any reason, still continue
+                    pass
+            except Exception as e:
+                # Make this visible in normal logs; use warning so users running at INFO see it
+                logger.warning("mDNS registration scheduler unavailable: %s", e)
+        else:
+            logger.info("mDNS registration disabled by --no-mdns flag")
+
         logger.info(f"*** Tado Local ready! ***")
         logger.info(f"Bridge IP: {bridge_ip}")
         logger.info(f"API Server: http://0.0.0.0:{args.port}")
@@ -265,6 +315,13 @@ async def run_server(args):
             # Full cleanup
             await tado_api.cleanup()
 
+        # Unregister mDNS service if registered
+        try:
+            from .zeroconf_register import unregister_service
+            unregister_service()
+        except Exception:
+            pass
+
         # Clean up PID file
         if args.pid_file:
             pid_path = Path(args.pid_file)
@@ -332,6 +389,8 @@ API Endpoints:
     )
     parser.add_argument("--state", default="~/.tado-local.db",
                        help="Path to state database (default: ~/.tado-local.db)")
+    parser.add_argument("--no-mdns", action="store_true",
+                       help="Disable mDNS/Avahi/zeroconf service registration at startup")
     parser.add_argument("--bridge-ip",
                        help="IP of the Tado bridge (e.g., 192.168.1.100). If not provided, will auto-discover from existing pairings.")
     parser.add_argument("--pin",
@@ -348,24 +407,21 @@ API Endpoints:
                        help="Send logs to syslog instead of stdout (e.g., /dev/log, localhost:514, or remote.server:514)")
     parser.add_argument("--pid-file",
                        help="Write process ID to specified file (useful for daemon mode)")
-
+    # Parse CLI arguments
     args = parser.parse_args()
 
-    # Daemon mode implies PID file if not specified
-    if args.daemon and not args.pid_file:
-        args.pid_file = "/var/run/tado-local.pid" if sys.platform != "win32" else "tado-local.pid"
+    # mDNS registration is handled inside run_server (so CLI only needs to expose the flag).
+    if args.no_mdns:
+        logger.info("mDNS registration disabled by --no-mdns flag")
 
-    # Configure logging based on mode
+    # Configure logging destination: syslog (if requested), daemon, or console
     if args.syslog:
-        # Syslog mode: send to syslog facility
-        # Parse syslog address
         syslog_address = args.syslog
         if ':' in syslog_address and not syslog_address.startswith('/'):
             # Network address (host:port)
             host, port = syslog_address.rsplit(':', 1)
             syslog_address = (host, int(port))
         # else: Unix socket path (e.g., /dev/log)
-        
         try:
             syslog_handler = logging.handlers.SysLogHandler(
                 address=syslog_address,
@@ -374,14 +430,14 @@ API Endpoints:
             syslog_handler.setFormatter(logging.Formatter(
                 'tado-local[%(process)d]: %(levelname)s %(message)s'
             ))
-            
+
             root_logger = logging.getLogger()
             root_logger.setLevel(logging.INFO)
             root_logger.addHandler(syslog_handler)
-            
+
             # Silence console output in syslog mode
             logging.getLogger().handlers = [syslog_handler]
-            
+
             logger.info("Logging to syslog: %s", args.syslog)
         except Exception as e:
             # Fall back to console if syslog fails
