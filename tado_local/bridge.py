@@ -50,8 +50,11 @@ class TadoBridge:
     async def get_or_create_controller_identity(db_path: str):
         """Get or create a persistent controller identity for HomeKit pairing."""
 
+        # Ensure DB schema and run migrations before using DB
+        from .database import ensure_schema_and_migrate
+        ensure_schema_and_migrate(db_path)
+
         conn = sqlite3.connect(db_path)
-        conn.executescript(DB_SCHEMA)
 
         # Try to get existing controller identity
         cursor = conn.execute("SELECT controller_id, private_key, public_key FROM controller_identity LIMIT 1")

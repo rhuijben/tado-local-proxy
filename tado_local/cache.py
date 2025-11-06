@@ -46,6 +46,10 @@ class CharacteristicCacheSQLite(CharacteristicCacheMemory):
 
     def _init_db(self):
         """Initialize database schema for HomeKit cache storage."""
+        # Ensure overall DB schema/migrations are applied first
+        from .database import ensure_schema_and_migrate
+        ensure_schema_and_migrate(self.db_path)
+
         conn = sqlite3.connect(self.db_path)
         conn.execute(HOMEKIT_SCHEMA)
         conn.commit()

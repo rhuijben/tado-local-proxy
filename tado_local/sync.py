@@ -141,12 +141,14 @@ class TadoCloudSync:
                     """, (zone_name, zone_type, order_index, zone_id))
                     logger.debug(f"Updated zone {zone_id}: {zone_name} (Tado ID: {tado_zone_id}, order: {order_index})")
                 else:
-                    # Insert new zone
+                    # Insert new zone with stable uuid
+                    import uuid as _uuid
+                    new_uuid = str(_uuid.uuid4())
                     cursor.execute("""
                         INSERT INTO zones
-                        (tado_zone_id, tado_home_id, name, zone_type, order_id, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                    """, (tado_zone_id, home_id, zone_name, zone_type, order_index))
+                        (tado_zone_id, tado_home_id, name, zone_type, order_id, uuid, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    """, (tado_zone_id, home_id, zone_name, zone_type, order_index, new_uuid))
                     zone_id = cursor.lastrowid
                     logger.info(f"Created zone {zone_id}: {zone_name} (Tado ID: {tado_zone_id}, order: {order_index})")
 
@@ -211,6 +213,17 @@ class TadoCloudSync:
                     #     cursor.execute("""
                     #         UPDATE zones SET leader_device_id = ? WHERE zone_id = ?
                     #     """, (device_id, zone_id))
+
+                # Remove any zones from this home that are no longer present in cloud data
+                try:
+                    cloud_tado_ids = set(z['id'] for z in zones_data)
+                    cursor.execute("SELECT zone_id, tado_zone_id FROM zones WHERE tado_home_id = ?", (home_id,))
+                    for zone_id, tado_zone_id in cursor.fetchall():
+                        if tado_zone_id not in cloud_tado_ids:
+                            logger.info(f"Removing zone {zone_id} (Tado ID: {tado_zone_id}) - no longer present in cloud")
+                            cursor.execute("DELETE FROM zones WHERE zone_id = ?", (zone_id,))
+                except Exception as e:
+                    logger.debug(f"Error removing stale zones: {e}")
 
             conn.commit()
             conn.close()

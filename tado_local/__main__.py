@@ -81,6 +81,13 @@ async def run_server(args):
     try:
         # Initialize database and pairing
         db_path = Path(os.path.expanduser(args.state))
+        # Ensure DB schema and run migrations before anything else touches the DB.
+        from .database import ensure_schema_and_migrate
+        try:
+            ensure_schema_and_migrate(str(db_path))
+        except Exception as e:
+            logger.error(f"Database migration check failed: {e}")
+            raise
 
         # Initialize the API with database path
         tado_api = TadoLocalAPI(str(db_path))
@@ -267,6 +274,19 @@ async def run_server(args):
                     logger.info(f"PID file removed: {pid_path}")
             except Exception as e:
                 logger.warning(f"Failed to remove PID file: {e}")
+
+        # Forced exit after 3 seconds to avoid lingering connections (especially for browsers)
+        import threading
+        import sys
+        def force_exit():
+            logger.warning("Forcing process exit after 3 seconds to avoid lingering SSE connections.")
+            os._exit(0)
+        if sys.platform == "win32":
+            logger.warning("Forcing immediate process exit on Windows to avoid lingering connections and background jobs.")
+            os._exit(0)
+        else:
+            threading.Timer(3.0, force_exit).start()
+            logger.info("Shutdown complete. Process will exit in 3 seconds.")
 
 def main():
     """Main entry point for the CLI."""

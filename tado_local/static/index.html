@@ -860,7 +860,9 @@
 
                 // Detect cloud authentication change
                 const cloudAuth = data.cloud_api && data.cloud_api.authenticated;
-                if (lastCloudAuthState === false && cloudAuth === true) {
+                const cloudAuthRequired = data.cloud_api && data.cloud_api.authentication_required;
+                // Only show success if authentication was required and is now complete
+                if (lastCloudAuthState === false && cloudAuth === true && cloudAuthRequired) {
                     showSuccess('Cloud authentication successful!');
                     loadZones(); // Reload zones after cloud sync
                     // Stop polling status

@@ -546,6 +546,7 @@ def register_routes(app: FastAPI, get_tado_api):
             zones.append({
                 'zone_id': zone_id,
                 'name': name,
+                'uuid': zone_info.get('uuid'),
                 'leader_device_id': leader_device_id,
                 'leader_serial': leader_serial,
                 'leader_type': leader_type,
@@ -1333,6 +1334,11 @@ def register_routes(app: FastAPI, get_tado_api):
                                             'cur_heating': zone_state.get('current_heating_cooling_state', 0),
                                             'battery_low': zone_state.get('battery_low', False)
                                         }
+
+                                        # Include stable uuid for the zone if available so clients can use it
+                                        zone_uuid = zone_info.get('uuid') if zone_info else None
+                                        if zone_uuid:
+                                            state['uuid'] = zone_uuid
 
                                         event_obj = {
                                             'type': 'zone',

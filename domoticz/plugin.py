@@ -81,9 +81,78 @@ Connects to Tado Local and creates/updates thermostat devices for each zone.
 </plugin>
 """
 
-import Domoticz
+try:
+    import Domoticz
+except Exception:
+    # Domoticz isn't available in the test environment; allow import for helpers
+    Domoticz = None
 import json
 import time
+import re
+def merge_voicecontrol(description: str, new_entries: dict) -> str:
+    import re
+    existing = description or ""
+    m = re.search(r"<voicecontrol>(.*?)</voicecontrol>", existing, re.S)
+    if m:
+        pre = existing[:m.start()]
+        inner = m.group(1)
+        post = existing[m.end():]
+
+        orig_kv = []
+        other_lines = []
+        for line in inner.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if '=' in line:
+                k, v = line.split('=', 1)
+                orig_kv.append((k.strip(), v.strip()))
+            else:
+                other_lines.append(line)
+
+        merged = {k: v for k, v in orig_kv}
+        for k, v in new_entries.items():
+            if v is None:
+                continue
+            merged[str(k)] = str(v)
+
+        new_lines = []
+        seen = set()
+        for k, _ in orig_kv:
+            if k in merged:
+                new_lines.append(f"  {k} = {merged[k]}")
+                seen.add(k)
+
+        for k in new_entries.keys():
+            if k not in seen and new_entries.get(k) is not None:
+                new_lines.append(f"  {k} = {merged[str(k)]}")
+                seen.add(k)
+
+        for l in other_lines:
+            new_lines.append(f"  {l}")
+
+        block = "<voicecontrol>\n" + "\n".join(new_lines) + "\n</voicecontrol>"
+
+        new_desc = pre.rstrip()
+        if new_desc:
+            new_desc += "\n" + block
+        else:
+            new_desc = block
+        if post and post.strip():
+            new_desc += "\n" + post.lstrip()
+        return new_desc
+
+    new_lines = []
+    for k, v in new_entries.items():
+        if v is None:
+            continue
+        new_lines.append(f"  {k} = {v}")
+
+    block = "<voicecontrol>\n" + "\n".join(new_lines) + "\n</voicecontrol>"
+    existing_desc = existing.strip()
+    if existing_desc:
+        return existing_desc + "\n" + block
+    return block
 from typing import Dict, Any, Optional
 
 class BasePlugin:
@@ -182,6 +251,86 @@ class BasePlugin:
         if self.api_key:
             return f"Authorization: Bearer {self.api_key}\r\n"
         return ""
+
+    def _merge_voicecontrol(self, description: str, new_entries: Dict[str, Any]) -> str:
+        """Merge or insert a <voicecontrol>...</voicecontrol> block in the given description.
+
+        - If an existing <voicecontrol> block is present, parse its key=value lines and
+          update or insert keys from new_entries, preserving unknown keys and most of the
+          original ordering.
+        - If no block exists, append a new one to the description.
+        """
+        existing = description or ""
+        # Search for first <voicecontrol>...</voicecontrol> block
+        m = re.search(r"<voicecontrol>(.*?)</voicecontrol>", existing, re.S)
+        if m:
+            pre = existing[:m.start()]
+            inner = m.group(1)
+            post = existing[m.end():]
+
+            # Parse existing inner lines into (key, value) while preserving order
+            orig_kv = []
+            other_lines = []
+            for line in inner.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                if '=' in line:
+                    k, v = line.split('=', 1)
+                    orig_kv.append((k.strip(), v.strip()))
+                else:
+                    other_lines.append(line)
+
+            # Build merged dict
+            merged = {k: v for k, v in orig_kv}
+            for k, v in new_entries.items():
+                # Skip None entries
+                if v is None:
+                    continue
+                merged[str(k)] = str(v)
+
+            # Reconstruct lines: original keys in order, then any new keys
+            new_lines = []
+            seen = set()
+            for k, _ in orig_kv:
+                if k in merged:
+                    new_lines.append(f"  {k} = {merged[k]}")
+                    seen.add(k)
+
+            # Add any keys from new_entries that weren't present
+            for k in new_entries.keys():
+                if k not in seen and new_entries.get(k) is not None:
+                    new_lines.append(f"  {k} = {merged[str(k)]}")
+                    seen.add(k)
+
+            # Append other non key lines that were present
+            for l in other_lines:
+                new_lines.append(f"  {l}")
+
+            block = "<voicecontrol>\n" + "\n".join(new_lines) + "\n</voicecontrol>"
+
+            # Reassemble description, preserving spacing around blocks
+            new_desc = pre.rstrip()
+            if new_desc:
+                new_desc += "\n" + block
+            else:
+                new_desc = block
+            if post and post.strip():
+                new_desc += "\n" + post.lstrip()
+            return new_desc
+
+        # No existing block, append one
+        new_lines = []
+        for k, v in new_entries.items():
+            if v is None:
+                continue
+            new_lines.append(f"  {k} = {v}")
+
+        block = "<voicecontrol>\n" + "\n".join(new_lines) + "\n</voicecontrol>"
+        existing_desc = existing.strip()
+        if existing_desc:
+            return existing_desc + "\n" + block
+        return block
 
     def onStop(self):
         """Domoticz calls this when the plugin is stopped"""
@@ -777,6 +926,13 @@ class BasePlugin:
                 'thermostat_unit': thermostat_unit
             })
 
+            # If state includes a uuid from the API, store it for voicecontrol XML
+            zone_uuid = None
+            if isinstance(state, dict):
+                zone_uuid = state.get('uuid') or state.get('zone_uuid')
+                if zone_uuid:
+                    self.zones_cache[zone_id]['uuid'] = zone_uuid
+
             # Create temperature + humidity sensor if needed
             if temp_unit not in self.device_creation_attempted and temp_unit not in Devices:
                 self.device_creation_attempted.add(temp_unit)
@@ -847,50 +1003,66 @@ class BasePlugin:
                     temp_idx = Devices[temp_unit].ID
                     thermostat_idx = Devices[thermostat_unit].ID
                     heating_idx = Devices[heating_unit].ID
-                    
-                    # Check if we need to update descriptions (only if not already set)
-                    if '<voicecontrol>' not in Devices[thermostat_unit].Description:
-                        # Get existing description and append voicecontrol XML
-                        existing_desc = Devices[thermostat_unit].Description.strip()
-                        voicecontrol_xml = f"""<voicecontrol>
-  nicknames = {zone_name} Thermostat
-  room = {zone_name}
-  actual_temp_idx = {temp_idx}
-  minThreehold = 5
-  maxThreehold = 30
-</voicecontrol>"""
-                        thermostat_desc = f"{existing_desc}\n{voicecontrol_xml}" if existing_desc else voicecontrol_xml
-                        Devices[thermostat_unit].Update(nValue=Devices[thermostat_unit].nValue, 
+
+                    # Set voicecontrol XML for thermostat, temperature sensor, and heating selector if not already present
+                    # Thermostat - include uuid if available
+                    # Merge/update voicecontrol block for thermostat
+                    try:
+                        zone_uuid_val = self.zones_cache.get(zone_id, {}).get('uuid')
+                        new_entries = {
+                            'nicknames': f"{zone_name} Thermostat",
+                            'room': zone_name,
+                            'actual_temp_idx': temp_idx,
+                            'minThreehold': 5,
+                            'maxThreehold': 30,
+                        }
+                        if zone_uuid_val:
+                            new_entries['uuid'] = zone_uuid_val
+
+                        merged = merge_voicecontrol(Devices[thermostat_unit].Description, new_entries)
+                        Devices[thermostat_unit].Update(nValue=Devices[thermostat_unit].nValue,
                                                         sValue=Devices[thermostat_unit].sValue,
-                                                        Description=thermostat_desc)
-                        Domoticz.Debug(f"Set voicecontrol XML for thermostat unit {thermostat_unit}")
-                    
-                    # Update temp sensor to hide it
-                    if '<voicecontrol>' not in Devices[temp_unit].Description:
-                        existing_desc = Devices[temp_unit].Description.strip()
-                        voicecontrol_xml = f"""<voicecontrol>
-  room = {zone_name}
-  hide = True
-</voicecontrol>"""
-                        temp_desc = f"{existing_desc}\n{voicecontrol_xml}" if existing_desc else voicecontrol_xml
+                                                        Description=merged)
+                        Domoticz.Debug(f"Merged voicecontrol XML for thermostat unit {thermostat_unit}")
+                    except Exception as e:
+                        Domoticz.Debug(f"Error merging voicecontrol for thermostat: {e}")
+
+                    # Temp sensor - hide via voicecontrol
+                    # Merge/update voicecontrol block for temp sensor to hide it
+                    try:
+                        zone_uuid_val = self.zones_cache.get(zone_id, {}).get('uuid')
+                        new_entries = {
+                            'room': zone_name,
+                            'hide': 'True'
+                        }
+                        if zone_uuid_val:
+                            new_entries['uuid'] = zone_uuid_val
+                        merged = merge_voicecontrol(Devices[temp_unit].Description, new_entries)
                         Devices[temp_unit].Update(nValue=Devices[temp_unit].nValue,
                                                   sValue=Devices[temp_unit].sValue,
-                                                  Description=temp_desc)
-                        Domoticz.Debug(f"Set voicecontrol XML for temp sensor unit {temp_unit}")
-                    
-                    # Update heating selector to hide it
-                    if '<voicecontrol>' not in Devices[heating_unit].Description:
-                        existing_desc = Devices[heating_unit].Description.strip()
-                        voicecontrol_xml = f"""<voicecontrol>
-  room = {zone_name}
-  hide = True
-</voicecontrol>"""
-                        heating_desc = f"{existing_desc}\n{voicecontrol_xml}" if existing_desc else voicecontrol_xml
+                                                  Description=merged)
+                        Domoticz.Debug(f"Merged voicecontrol XML for temp sensor unit {temp_unit}")
+                    except Exception as e:
+                        Domoticz.Debug(f"Error merging voicecontrol for temp sensor: {e}")
+
+                    # Heating selector - hide via voicecontrol
+                    # Merge/update voicecontrol block for heating selector to hide it
+                    try:
+                        zone_uuid_val = self.zones_cache.get(zone_id, {}).get('uuid')
+                        new_entries = {
+                            'room': zone_name,
+                            'hide': 'True'
+                        }
+                        if zone_uuid_val:
+                            new_entries['uuid'] = zone_uuid_val
+                        merged = merge_voicecontrol(Devices[heating_unit].Description, new_entries)
                         Devices[heating_unit].Update(nValue=Devices[heating_unit].nValue,
                                                      sValue=Devices[heating_unit].sValue,
-                                                     Description=heating_desc)
-                        Domoticz.Debug(f"Set voicecontrol XML for heating selector unit {heating_unit}")
-                        
+                                                     Description=merged)
+                        Domoticz.Debug(f"Merged voicecontrol XML for heating selector unit {heating_unit}")
+                    except Exception as e:
+                        Domoticz.Debug(f"Error merging voicecontrol for heating selector: {e}")
+
                 except Exception as e:
                     Domoticz.Debug(f"Error setting voicecontrol XML: {e}")
 

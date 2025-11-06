@@ -53,6 +53,18 @@ coverage.xml
 .pytest_cache/
 cover/
 
+# Test artifacts
+tests/*.db
+*.db
+.pytest_cache/
+
+# Ignore local or leftover domoticz helper files (plugin is single-file)
+domoticz/voicecontrol.py
+domoticz/__init__.py
+
+# Ignore stray local CI workflow copies
+.github/workflows/pytest.yml
+
 # Translations
 *.mo
 *.pot

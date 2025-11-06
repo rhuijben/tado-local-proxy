@@ -69,83 +69,27 @@ class DeviceStateManager:
         self.optimistic_state: Dict[int, Dict[str, Any]] = {}  # device_id -> predicted state changes
         self.optimistic_timestamps: Dict[int, float] = {}  # device_id -> timestamp when prediction was made
         self.optimistic_timeout = 10.0  # Revert predictions after 10 seconds if no real update
-        
-        self._ensure_schema()
+
+        # Ensure DB schema and migrations are applied before using DB. All
+        # schema updates are centralized in `tado_local.database.ensure_schema_and_migrate`.
+        from .database import ensure_schema_and_migrate
+        ensure_schema_and_migrate(self.db_path)
+
+        # Load caches and latest state (schema guaranteed by central migrator)
         self._load_device_cache()
         self._load_zone_cache()
         self._load_latest_state_from_db()
 
-    def _ensure_schema(self):
-        """Ensure the device tables exist in the database."""
-        conn = sqlite3.connect(self.db_path)
-
-        # Create zones table first WITHOUT foreign key (to avoid circular dependency)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS zones (
-                zone_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                leader_device_id INTEGER,
-                order_id INTEGER,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_zones_order ON zones(order_id)")
-
-        # Create devices table with zone_id column
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS devices (
-                device_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                serial_number TEXT UNIQUE NOT NULL,
-                aid INTEGER,
-                zone_id INTEGER,
-                device_type TEXT,
-                name TEXT,
-                model TEXT,
-                manufacturer TEXT,
-                first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (zone_id) REFERENCES zones(zone_id) ON DELETE SET NULL
-            )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_devices_serial ON devices(serial_number)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_devices_zone ON devices(zone_id)")
-
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS device_state_history (
-                device_id INTEGER NOT NULL,
-                timestamp_bucket TEXT NOT NULL,
-                current_temperature REAL,
-                target_temperature REAL,
-                current_heating_cooling_state INTEGER,
-                target_heating_cooling_state INTEGER,
-                heating_threshold_temperature REAL,
-                cooling_threshold_temperature REAL,
-                temperature_display_units INTEGER,
-                battery_level INTEGER,
-                status_low_battery INTEGER,
-                humidity REAL,
-                target_humidity REAL,
-                active_state INTEGER,
-                valve_position INTEGER,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (device_id, timestamp_bucket),
-                FOREIGN KEY (device_id) REFERENCES devices(device_id) ON DELETE CASCADE
-            )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_history_device_time ON device_state_history(device_id, timestamp_bucket DESC)")
-
-        conn.commit()
-        conn.close()
+        # Note: schema creation and migrations are centralized in tado_local.database.ensure_schema_and_migrate
 
     def _load_device_cache(self):
         """Load device ID mappings and info from database."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.execute("""
-            SELECT d.device_id, d.serial_number, d.aid, d.name, d.device_type,
-                   d.zone_id, z.name as zone_name, d.is_zone_leader, d.is_circuit_driver, d.battery_state
-            FROM devices d
-            LEFT JOIN zones z ON d.zone_id = z.zone_id
+         SELECT d.device_id, d.serial_number, d.aid, d.name, d.device_type,
+             d.zone_id, z.name as zone_name, d.is_zone_leader, d.is_circuit_driver, d.battery_state
+         FROM devices d
+         LEFT JOIN zones z ON d.zone_id = z.zone_id
         """)
         for device_id, serial_number, aid, name, device_type, zone_id, zone_name, is_zone_leader, is_circuit_driver, battery_state in cursor.fetchall():
             self.device_id_cache[serial_number] = device_id
@@ -171,13 +115,13 @@ class DeviceStateManager:
         cursor = conn.execute("""
             SELECT z.zone_id, z.name, z.leader_device_id, z.order_id,
                    d.serial_number as leader_serial, d.device_type as leader_type,
-                   d.is_circuit_driver
+                   d.is_circuit_driver, z.uuid
             FROM zones z
             LEFT JOIN devices d ON z.leader_device_id = d.device_id
             ORDER BY z.order_id, z.name
         """)
 
-        for zone_id, name, leader_device_id, order_id, leader_serial, leader_type, is_circuit_driver in cursor.fetchall():
+        for zone_id, name, leader_device_id, order_id, leader_serial, leader_type, is_circuit_driver, uuid_val in cursor.fetchall():
             self.zone_cache[zone_id] = {
                 'zone_id': zone_id,
                 'name': name,
@@ -185,7 +129,8 @@ class DeviceStateManager:
                 'order_id': order_id,
                 'leader_serial': leader_serial,
                 'leader_type': leader_type,
-                'is_circuit_driver': bool(is_circuit_driver)
+                'is_circuit_driver': bool(is_circuit_driver),
+                'uuid': uuid_val
             }
 
         conn.close()

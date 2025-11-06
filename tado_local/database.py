@@ -154,3 +154,91 @@ CREATE TABLE IF NOT EXISTS tado_cloud_cache (
 
 CREATE INDEX IF NOT EXISTS idx_cloud_cache_expiry ON tado_cloud_cache(home_id, expires_at);
 """
+
+
+def ensure_schema_and_migrate(db_path: str):
+    """Ensure all schemas exist and run DB migrations using PRAGMA user_version.
+
+    Creates core schemas (DB_SCHEMA, HOMEKIT_SCHEMA, CLOUD_SCHEMA) and applies
+    incremental migrations. Currently migration to user_version 2 adds a stable
+    uuid column to the `zones` table and populates it with generated UUIDs.
+    """
+    import sqlite3
+    import uuid as _uuid
+    # Supported schema version for this codebase. If the database reports a
+    # higher user_version we should refuse to start to avoid silent data loss
+    # or incompatible assumptions.
+    SUPPORTED_SCHEMA_VERSION = 2
+
+    # Open connection and check current schema version before applying changes
+    conn = sqlite3.connect(db_path)
+    try:
+        cur_v = conn.execute("PRAGMA user_version").fetchone()
+        current_user_version = cur_v[0] if cur_v else 0
+        if current_user_version > SUPPORTED_SCHEMA_VERSION:
+            raise RuntimeError(f"Database schema version ({current_user_version}) is newer than supported ({SUPPORTED_SCHEMA_VERSION})")
+    except Exception:
+        # If the user cannot even query PRAGMA user_version we will surface
+        # the error via the normal exception flow below when attempting to
+        # apply schemas/migrations.
+        pass
+
+    def _apply_script_tolerant(conn, script: str):
+        # Execute script statement-by-statement and ignore statements that fail
+        # due to schema differences (e.g., index creation referencing missing columns).
+        for stmt in [s.strip() for s in script.split(';') if s.strip()]:
+            try:
+                conn.execute(stmt)
+            except sqlite3.OperationalError:
+                # Tolerate missing columns/indexes on older DBs; we'll re-attempt later.
+                continue
+
+    # Try applying base schemas tolerant to older DBs; re-run after migrations
+    _apply_script_tolerant(conn, DB_SCHEMA)
+    _apply_script_tolerant(conn, HOMEKIT_SCHEMA)
+    _apply_script_tolerant(conn, CLOUD_SCHEMA)
+
+    cursor = conn.execute("PRAGMA user_version")
+    row = cursor.fetchone()
+    current_version = row[0] if row else 0
+
+    # Migration to version 2: add uuid column to zones and populate stable uuids
+    if current_version < 2:
+        try:
+            # Use explicit transaction to ensure atomic migration
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                conn.execute("ALTER TABLE zones ADD COLUMN uuid TEXT")
+            except Exception:
+                # Column may already exist depending on prior runs
+                pass
+
+            # Populate uuid for existing rows where null
+            cur = conn.execute("SELECT zone_id, uuid FROM zones")
+            for zone_id, existing in cur.fetchall():
+                if not existing:
+                    new_uuid = str(_uuid.uuid4())
+                    conn.execute("UPDATE zones SET uuid = ? WHERE zone_id = ?", (new_uuid, zone_id))
+
+            conn.execute("PRAGMA user_version = 2")
+            current_version = 2
+            conn.commit()
+        except Exception:
+            # Rollback any partial changes on error
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            conn.close()
+    else:
+        conn.close()
+
+    # Ensure all schema scripts applied now that migrations are done
+    conn = sqlite3.connect(db_path)
+    _apply_script_tolerant(conn, DB_SCHEMA)
+    _apply_script_tolerant(conn, HOMEKIT_SCHEMA)
+    _apply_script_tolerant(conn, CLOUD_SCHEMA)
+    conn.commit()
+    conn.close()
