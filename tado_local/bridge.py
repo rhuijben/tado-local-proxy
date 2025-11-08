@@ -528,7 +528,7 @@ class TadoBridge:
         raise RuntimeError("No pairing data found and no PIN provided. Provide --pin to pair first.")
 
     @staticmethod
-    async def perform_pairing_with_controller(host: str, port: int = 80, hap_pin: str = "557-15-876", db_path: str = None):
+    async def perform_pairing_with_controller(host: str, port: int = 80, hap_pin: str = None, db_path: str = None):
         """
         Perform HomeKit pairing using Controller.start_pairing() method.
         """
