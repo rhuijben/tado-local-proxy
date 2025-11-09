@@ -188,9 +188,6 @@ def show_list(verbose, zones, quiet=False):
         else:
             setting = 'AUTO'
 
-        # Activity indicator (for Heat column)
-        heat_s = 'ON' if cur_heating > 0 else ''
-
         # Activity status (what the system is doing)
         if mode == 0:
             status_str = 'OFF'
@@ -203,9 +200,9 @@ def show_list(verbose, zones, quiet=False):
 
         # Format output
         if cur_temp is not None and cur_hum is not None:
-            print(f'{zone_id:<2}  {zone_data["name"]:<14}  {heat_s:>4}  {setting:>7}  {status_str:<8}  {cur_temp:5.1f}°C  {cur_hum:5.1f}%')
+            print(f'{zone_id:<2}  {zone_data["name"]:<14}  {setting:>7}  {status_str:<8}  {cur_temp:5.1f}°C  {cur_hum:5.1f}%')
         else:
-            print(f'{zone_id:<2}  {zone_data["name"]:<14}  {"":>4}  {"":>7}  {"-":<8}  {"":>5}     {"":>5}')
+            print(f'{zone_id:<2}  {zone_data["name"]:<14}  {"":>7}  {"-":<8}  {"":>5}     {"":>5}')
 
 
 def set_temperature(zones, temp):
