@@ -457,10 +457,8 @@ class TadoBridge:
                     zeroconf_instance = None
 
                 # Perform pairing using enhanced protocol with persistent controller identity
-                pairing_result = await TadoBridge.perform_pairing_with_controller(bridge_ip, 80, pin, str(db_path))
-
                 # Use the pairing data as returned by the protocol
-                pairing_data = pairing_result
+                pairing_data = await TadoBridge.perform_pairing_with_controller(bridge_ip, 80, pin, str(db_path))
 
                 # Save to DB
                 conn.execute(
@@ -528,54 +526,19 @@ class TadoBridge:
         raise RuntimeError("No pairing data found and no PIN provided. Provide --pin to pair first.")
 
     @staticmethod
-    async def perform_pairing_with_controller(host: str, port: int = 80, hap_pin: str = None, db_path: str = None):
+    async def perform_pairing_with_controller(host: str, port: int, hap_pin: str, db_path: str):
         """
         Perform HomeKit pairing using Controller.start_pairing() method.
         """
         try:
             logger.info(f"Starting controller-based pairing with {host}:{port} using PIN: {hap_pin}")
 
-            # Default db path if not provided
-            if not db_path:
-                db_path = str(Path.home() / ".tado-local.db")
-
             # Get or create persistent controller identity
             controller_id, private_key, public_key = await TadoBridge.get_or_create_controller_identity(db_path)
             logger.info(f"Using Controller ID: {controller_id}")
 
             try:
-                # Create required dependencies for Controller
-                # Note: zeroconf is only needed for discovery, not for known IP pairing
-                # However, the Controller.start_pairing() method may require it temporarily
-
-                # Create AsyncZeroconf instance (needed for initial pairing only)
-                zeroconf_instance = AsyncZeroconf()
-
-                # Create SQLite-backed characteristic cache
-                char_cache = CharacteristicCacheSQLite(db_path)
-
-                # Create the main Controller (not IpController)
-                # This is only used for initial pairing - subsequent connections use IpController without zeroconf
-                controller = Controller(
-                    async_zeroconf_instance=zeroconf_instance,
-                    char_cache=char_cache
-                )
-
-                logger.debug(f"Created controller with proper dependencies")
-
-                # Start pairing using the controller's built-in method
-                logger.info(f"Starting pairing process...")
-
-                # This should use the controller's pairing method which returns an IpPairing
-                pairing = await controller.start_pairing(host, hap_pin)
-
-                logger.info(f"Pairing completed successfully!")
-
-                # Clean up zeroconf instance after pairing
-                await zeroconf_instance.async_close()
-
-                # Extract pairing data in the correct format
-                pairing_data = pairing.pairing_data
+                pairing_data = await TadoBridge.perform_fresh_pairing(host, port, hap_pin, controller_id, db_path)
 
                 logger.info(f"PAIRING SUCCESS! Controller-based approach, Controller ID: {controller_id}")
 
