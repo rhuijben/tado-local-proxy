@@ -640,6 +640,7 @@ def register_routes(app: FastAPI, get_tado_api):
         zone_id: int,
         temperature: Optional[float] = None,
         heating_enabled: Optional[bool] = None,
+        no_implicit_mode: Optional[bool] = False,
         api_key: Optional[str] = Depends(get_api_key)
     ):
         """
@@ -687,7 +688,7 @@ def register_routes(app: FastAPI, get_tado_api):
                 temperature = None  # Don't set temperature
             elif temperature == 0:
                 heating_enabled = False
-            elif temperature >= 5.0:
+            elif temperature >= 5.0 and no_implicit_mode is not True:
                 heating_enabled = True
         elif temperature == -1:
             # temperature=-1 always means "don't change temperature, just enable"

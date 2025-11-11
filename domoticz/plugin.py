@@ -65,7 +65,13 @@ Connects to Tado Local and creates/updates thermostat devices for each zone.
             </options>
         </param>
         <param field="Mode3" label="API Key (optional)" width="300px" default="" password="true"/>
-        <param field="Mode4" label="Setup voicecontrol XML" width="100px">
+        <param field="Mode4" label="SetPointZeroForOff" width="100px">
+            <options>
+                <option label="Yes" value="true" default="true"/>
+                <option label="No" value="false"/>
+            </options>
+        </param>
+        <param field="Mode5" label="Setup voicecontrol XML" width="100px">
             <options>
                 <option label="Yes" value="true"/>
                 <option label="No" value="false" default="true"/>
@@ -187,7 +193,12 @@ class BasePlugin:
         self.retry_interval = int(Parameters["Mode1"])
         self.auto_enable_devices = (Parameters.get("Mode2", "true") == "true")
         self.api_key = Parameters.get("Mode3", "").strip()
-        self.setup_voicecontrol = (Parameters.get("Mode4", "false") == "true")
+
+        # Mode4: when true, keep legacy behaviour where setpoint shows 0 when zone is disabled
+        # when false (non-default mode), display the actual Tado target temperature directly
+        # and when setting temperature do not implicitly enable/disable the zone (no_implicit_mode)
+        self.set_point_zero_instead_of_heat_auto = (Parameters.get("Mode4", "false") == "true")
+        self.setup_voicecontrol = (Parameters.get("Mode5", "false") == "true")
 
         # Set debug mode
         if Parameters["Mode6"] == "Debug":
@@ -196,9 +207,8 @@ class BasePlugin:
         Domoticz.Log(f"Tado Local Plugin started - API: {self.api_url}")
         Domoticz.Log(f"Retry interval: {self.retry_interval} seconds")
         Domoticz.Log(f"Auto-enable devices: {'Yes' if self.auto_enable_devices else 'No'}")
+        Domoticz.Log(f"Set point zero instead of heat auto: {'Yes' if self.set_point_zero_instead_of_heat_auto else 'No'}")
         Domoticz.Log(f"Setup voicecontrol XML: {'Yes' if self.setup_voicecontrol else 'No'}")
-        Domoticz.Log(f"Retry interval: {self.retry_interval} seconds")
-        Domoticz.Log(f"Auto-enable devices: {'Yes' if self.auto_enable_devices else 'No'}")
         if self.api_key:
             Domoticz.Log("API Key configured (authentication enabled)")
         else:
@@ -672,8 +682,11 @@ class BasePlugin:
             zone_name = self.zones_cache[zone_id]['name']
             Domoticz.Log(f"Processing command for zone: {zone_name} (ID: {zone_id})")
 
-            # Handle thermostat setpoint changes
-            if Command == "Set Level":
+            # Determine if this Unit is the heating selector for this zone
+            heating_unit = self.zones_cache.get(zone_id, {}).get('heating_unit')
+
+            # Handle thermostat setpoint changes (thermostat Unit)
+            if Command == "Set Level" and self.zones_cache.get(zone_id, {}).get('thermostat_unit') == Unit:
                 target_temp = float(Level)
                 if target_temp == 0:
                     Domoticz.Log(f"Turning off {zone_name}")
@@ -684,7 +697,25 @@ class BasePlugin:
                     self.controlZone(zone_id, heating_enabled=True)
                 else:
                     Domoticz.Log(f"Setting {zone_name} to {target_temp}°C")
-                    self.controlZone(zone_id, target_temperature=target_temp, heating_enabled=True)
+                    # If Mode4 (legacy) is enabled we keep implicit enable on temp set
+                    if self.set_point_zero_instead_of_heat_auto:
+                        # Legacy: setting temperature also enables heating
+                        self.controlZone(zone_id, target_temperature=target_temp, heating_enabled=True)
+                    else:
+                        # New mode: direct temperature mapping, do not implicitly change enable/disable
+                        self.controlZone(zone_id, target_temperature=target_temp, no_implicit_mode=True)
+
+            # Handle heating selector changes (Unit 3)
+            elif Command == "Set Level" and heating_unit == Unit:
+                # Level will be Domoticz numeric (0,10,20,30,40). Any non-zero level enables heating.
+                Domoticz.Log(f"Heating selector changed for {zone_name}, Level={Level}")
+                if int(Level) == 0:
+                    Domoticz.Log(f"Turning off {zone_name} via heating selector")
+                    self.controlZone(zone_id, heating_enabled=False)
+                else:
+                    Domoticz.Log(f"Enabling heating for {zone_name} via heating selector")
+                    self.controlZone(zone_id, heating_enabled=True)
+
             elif Command == "Off":
                 Domoticz.Log(f"Turning off {zone_name}")
                 self.controlZone(zone_id, heating_enabled=False)
@@ -923,7 +954,8 @@ class BasePlugin:
             self.zones_cache[zone_id].update({
                 'name': zone_name,
                 'base_unit': base_unit,
-                'thermostat_unit': thermostat_unit
+                'thermostat_unit': thermostat_unit,
+                'heating_unit': heating_unit
             })
 
             # If state includes a uuid from the API, store it for voicecontrol XML
@@ -973,13 +1005,13 @@ class BasePlugin:
             if heating_unit not in self.device_creation_attempted and heating_unit not in Devices:
                 self.device_creation_attempted.add(heating_unit)
                 try:
-                    # Selector Switch with HomeKit-compatible modes
-                    # Level 0 = Off, Level 1 = Heat, Level 2 = Cool
-                    # This matches cur_heating values: 0=Off, 1=Heating, 2=Cooling
+                    # Selector Switch with enhanced modes
+                    # Levels: Off, Auto, PreHeat, Heat, Cool
+                    # Map to internal numeric levels: 0=Off, 1=Auto, 2=PreHeat, 3=Heat, 4=Cool
                     options = {
-                        'LevelActions': '||',  # 2 separators = 3 levels
-                        'LevelNames': 'Off|Heat|Cool',
-                        'LevelOffHidden': 'true',  # Hide the internal "Off" state
+                        'LevelActions': '||||',  # 4 separators = 5 levels
+                        'LevelNames': 'Off|Auto|PreHeat|Heat|Cool',
+                        'LevelOffHidden': 'false',  # Show the Off state in the dropdown
                         'SelectorStyle': '1'  # 0=buttons, 1=dropdown
                     }
                     device = Domoticz.Device(
@@ -1096,22 +1128,49 @@ class BasePlugin:
 
             # Update thermostat setpoint
             if thermostat_unit in Devices:
-                setpoint_temp = target_temp if mode != 0 else 0.0
+                # Behavior depends on Mode4 setting
+                if self.set_point_zero_instead_of_heat_auto:
+                    # Legacy behavior: show 0 when zone is disabled
+                    setpoint_temp = target_temp if mode != 0 else 0.0
+                else:
+                    # New behavior: always show the actual Tado target temperature
+                    setpoint_temp = target_temp
+
                 Domoticz.Debug(f"Updating {zone_name} thermostat: setpoint={setpoint_temp}°C, mode={mode}")
                 Devices[thermostat_unit].Update(nValue=0, sValue=str(setpoint_temp), BatteryLevel=battery_level)
 
-            # Update heating status selector
+            # Update heating status selector with multi-level logic
             if heating_unit in Devices:
-                # cur_heating: 0=Off, 1=Heating, 2=Cooling
-                # Map directly to selector levels 0, 1, 2
-                Domoticz.Debug(f"Updating {zone_name} heating status: {cur_heating}")
-                # For selector switch: nValue and sValue must be 0, 10, 20 (Domoticz convention)
-                if cur_heating in (0, 1, 2):
-                    nValue = cur_heating * 10
-                    sValue = str(nValue)
+                # Determine enabled state from mode (0=Off, otherwise enabled)
+                enabled = (mode != 0)
+
+                # Levels mapping:
+                # 0 = Off (zone disabled)
+                # 1 = Auto (enabled, not heating, temp >= setpoint)
+                # 2 = PreHeat (enabled, not heating, temp < setpoint)
+                # 3 = Heat (enabled and heating active)
+                # 4 = Cool (enabled and cooling active)
+
+                level = 0
+                if not enabled:
+                    level = 0
                 else:
-                    nValue = 0
-                    sValue = "0"
+                    if cur_heating == 1:
+                        level = 3
+                    elif cur_heating == 2:
+                        level = 4
+                    else:
+                        # Enabled but not actively heating/cooling
+                        if target_temp is not None and cur_temp is not None and cur_temp < target_temp:
+                            level = 2  # PreHeat
+                        else:
+                            level = 1  # Auto
+
+                # For selector switch: Domoticz expects nValue as numeric and sValue typically as string numeric marker.
+                # Use 0,10,20,30,40 convention for compatibility with previous code.
+                nValue = level * 10
+                sValue = str(nValue)
+                Domoticz.Debug(f"Updating {zone_name} heating status: level={level}, nValue={nValue}")
                 Devices[heating_unit].Update(nValue=nValue, sValue=sValue, BatteryLevel=battery_level)
 
         except Exception as e:
@@ -1186,7 +1245,7 @@ class BasePlugin:
         except Exception as e:
             Domoticz.Error(f"Error updating thermostat device: {e}")
 
-    def controlZone(self, zone_id: int, target_temperature: Optional[float] = None, heating_enabled: Optional[bool] = None):
+    def controlZone(self, zone_id: int, target_temperature: Optional[float] = None, heating_enabled: Optional[bool] = None, no_implicit_mode: bool = False):
         """Control a zone with optional temperature and/or heating mode in a single request"""
         try:
             # Build query parameters
@@ -1197,6 +1256,9 @@ class BasePlugin:
             if heating_enabled is not None:
                 params.append(f"heating_enabled={'true' if heating_enabled else 'false'}")
                 Domoticz.Log(f"controlZone: zone {zone_id} heating_enabled={heating_enabled}")
+            if no_implicit_mode:
+                params.append("no_implicit_mode=true")
+                Domoticz.Log(f"controlZone: zone {zone_id} no_implicit_mode=true")
 
             if not params:
                 Domoticz.Error("controlZone called with no parameters")
