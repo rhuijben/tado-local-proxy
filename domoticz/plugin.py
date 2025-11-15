@@ -1147,9 +1147,9 @@ class BasePlugin:
                 Domoticz.Debug(f"Updating {zone_name} thermostat: setpoint={setpoint_temp}°C, mode={mode}")
                 # Ensure thermostat devices (existing or newly created) have consistent Options
                 options = {
-                    'Min': '5',
-                    'Max': '25',
-                    'Step': '0.1'
+                    'ValueMin': '5',
+                    'ValueMax': '25',
+                    'ValueStep': '0.1'
                 }
                 try:
                     Devices[thermostat_unit].Update(nValue=0, sValue=str(setpoint_temp), BatteryLevel=battery_level, Options=options)
