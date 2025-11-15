@@ -671,22 +671,23 @@ class BasePlugin:
 
             zone_id = None
             for zid, zone_data in self.zones_cache.items():
-                if zone_data.get('thermostat_unit') == Unit:
+                base_unit = zone_data.get('base_unit')
+                thermostat_unit = zone_data.get('thermostat_unit')
+                heating_unit = zone_data.get('heating_unit')
+                extra_thermostat_unit = zone_data.get('extra_thermostat_unit')
+                if Unit in (base_unit, thermostat_unit, heating_unit, extra_thermostat_unit):
                     zone_id = zid
                     break
 
             if zone_id is None:
-                Domoticz.Debug(f"Unit {Unit} is not a thermostat device")
+                Domoticz.Log(f"Unit {Unit} is not a thermostat device, ignoring command")
                 return
 
             zone_name = self.zones_cache[zone_id]['name']
             Domoticz.Log(f"Processing command for zone: {zone_name} (ID: {zone_id})")
 
-            # Determine if this Unit is the heating selector for this zone
-            heating_unit = self.zones_cache.get(zone_id, {}).get('heating_unit')
-
             # Handle thermostat setpoint changes (thermostat Unit)
-            if Command == "Set Level" and self.zones_cache.get(zone_id, {}).get('thermostat_unit') == Unit:
+            if Command == "Set Level" and thermostat_unit == Unit:
                 target_temp = float(Level)
                 if target_temp == 0:
                     Domoticz.Log(f"Turning off {zone_name}")
