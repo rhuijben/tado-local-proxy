@@ -989,11 +989,18 @@ class BasePlugin:
             if thermostat_unit not in self.device_creation_attempted and thermostat_unit not in Devices:
                 self.device_creation_attempted.add(thermostat_unit)
                 try:
+                    # Thermostat setpoint: constrain to Tado app limits 5.0-25.0 with 0.1 steps
+                    options = {
+                        'Min': '5',
+                        'Max': '25',
+                        'Step': '0.1'
+                    }
                     device = Domoticz.Device(
                         Name=f"{zone_name} Thermostat",
                         Unit=thermostat_unit,
                         Type=242,
                         Subtype=1,
+                        Options=options,
                         Used=1 if self.auto_enable_devices else 0
                     )
                     device.Create()
@@ -1042,11 +1049,11 @@ class BasePlugin:
                     try:
                         zone_uuid_val = self.zones_cache.get(zone_id, {}).get('uuid')
                         new_entries = {
+                            'ame': f"{zone_name} Thermostat",
                             'nicknames': f"{zone_name} Thermostat",
                             'room': zone_name,
                             'actual_temp_idx': temp_idx,
-                            'minThreehold': 5,
-                            'maxThreehold': 30,
+                            'selector_modes_idx': heating_idx
                         }
                         if zone_uuid_val:
                             new_entries['uuid'] = zone_uuid_val
@@ -1137,7 +1144,17 @@ class BasePlugin:
                     setpoint_temp = target_temp
 
                 Domoticz.Debug(f"Updating {zone_name} thermostat: setpoint={setpoint_temp}°C, mode={mode}")
-                Devices[thermostat_unit].Update(nValue=0, sValue=str(setpoint_temp), BatteryLevel=battery_level)
+                # Ensure thermostat devices (existing or newly created) have consistent Options
+                options = {
+                    'Min': '5',
+                    'Max': '25',
+                    'Step': '0.1'
+                }
+                try:
+                    Devices[thermostat_unit].Update(nValue=0, sValue=str(setpoint_temp), BatteryLevel=battery_level, Options=options)
+                except TypeError:
+                    # Older Domoticz may not accept Options on Update; fall back to Update without Options
+                    Devices[thermostat_unit].Update(nValue=0, sValue=str(setpoint_temp), BatteryLevel=battery_level)
 
             # Update heating status selector with multi-level logic
             if heating_unit in Devices:
